@@ -1,0 +1,126 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue import DynamicFrame
+
+# Get job arguments
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
+# Initialize Spark and Glue Contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# Define S3 Base Path
+Amazons3_node1736778963883 = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+
+# List of child APIs and their corresponding Redshift tables
+child_apis = {
+    "certificationapplicationapplicationids": "usastaffing_staging.certificateapplicationapplicationids",
+    "certificationapplicationnewhireids": "usastaffing_staging.certificateapplicationnewhireids",
+    "certificationapplicationRankinglistids": "usastaffing_staging.certificateapplicationrankinglistids",
+    "certificationapplicationrequestsids": "usastaffing_staging.certificateapplicationrequestsids"
+}
+
+# Function to read CSV from S3 and write to Redshift
+def process_api(api_name, redshift_table, headers):
+    s3_path = f"{s3_base_path}{api_name}/"
+    
+    # Read data from S3
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        format="csv",
+        format_options={
+            "quoteChar": '"',
+            "withHeader": True,
+            "separator": ","
+            "optimizeperformance": False,
+        },
+        connection_options={
+        "paths": ["s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"], "recurse": True},
+        transformation_ctx= "Amazons3_node1736778963883"
+    )
+    
+    # Write data to Redshift
+    glueContext.write_dynamic_frame.from_options(
+        frame=Amazons3_node1736778963883,
+        connection_type="redshift",
+        connection_options={
+            "redshiftTmpDir": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
+            "connectionName": "hed_dev_redshift_connection",
+            "dbtable": "usastaffing_staging.certificateapplication",
+            "preactions": f"""
+                CREATE TABLE IF NOT EXISTS {redshift_table} ({headers});
+                TRUNCATE TABLE {redshift_table};
+            """
+        },
+        transformation_ctx=f"Redshift_{api_name}_node"
+    )
+
+# Load main API: certificateapplications
+process_api(
+    "certificateapplications",
+    "usastaffing_staging.certificateapplication",
+    """
+    tenantid INTEGER, rankinglistid INTEGER, applicationid INTEGER, 
+    listapplicationid VARCHAR, applicationnumber VARCHAR, 
+    firstname VARCHAR, middlename VARCHAR, lastname VARCHAR, 
+    suffix VARCHAR, applicationname VARCHAR, startdatetime VARCHAR, 
+    prioritydescription VARCHAR, rankorder VARCHAR, rating VARCHAR, 
+    recordstatuscode VARCHAR, recordstatuscodedescription VARCHAR, 
+    addedflag VARCHAR, addeddatetime VARCHAR, auditcode VARCHAR, 
+    auditdatetime VARCHAR, certifieddatetime VARCHAR, 
+    eligibilityadjudicationstatus VARCHAR, eligibilityclaimed VARCHAR, 
+    eligibleseries VARCHAR, eligibilitystartdate VARCHAR, 
+    eligibilityenddate VARCHAR, expiredflag VARCHAR, 
+    veteranpreferencecode VARCHAR, veteranpreferencedescription VARCHAR, 
+    hiredpdnumber VARCHAR, hiredpositiontitle VARCHAR, hiredseries VARCHAR, 
+    hiredseriestitle VARCHAR, hiredcity VARCHAR, hiredcounty VARCHAR, 
+    hiredstate VARCHAR, hiredcountry VARCHAR, hiredlocationdescription VARCHAR, 
+    markedasfavoriteflag VARCHAR, markedforfollowupflag VARCHAR, 
+    reorderedflag VARCHAR, returnstatus VARCHAR, usahirecompleteddate VARCHAR, 
+    originallysubmitteddatetime VARCHAR, lastsubmitteddatetime VARCHAR, 
+    lastmodifieddatetime VARCHAR, dwlastmodifieddatetime VARCHAR
+    """
+)
+
+# Load child APIs
+process_api(
+    "certificationapplicationapplicationids",
+    "usastaffing_staging.certificateapplicationapplicationids",
+    """
+    tenantid INTEGER, CA_RankingListid INTEGER, CA_ApplicationId INTEGER, Applicationid INTEGER
+    """
+)
+
+process_api(
+    "certificationapplicationnewhireids",
+    "usastaffing_staging.certificateapplicationnewhireids",
+    """
+    tenantid INTEGER, CA_RankingListid INTEGER, CA_ApplicationId INTEGER, newhireid INTEGER
+    """
+)
+
+process_api(
+    "certificationapplicationRankinglistids",
+    "usastaffing_staging.certificateapplicationrankinglistids",
+    """
+    tenantid INTEGER, CA_RankingListid INTEGER, CA_ApplicationId INTEGER, rankinglistid INTEGER
+    """
+)
+
+process_api(
+    "certificationapplicationrequestsids",
+    "usastaffing_staging.certificateapplicationrequestsids",
+    """
+    tenantid INTEGER, CA_RankingListid INTEGER, CA_ApplicationId INTEGER, requestid INTEGER
+    """
+)
+
+# Commit the Glue job
+job.commit()

@@ -1,0 +1,80 @@
+import sys
+import re
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue import DynamicFrame
+
+# Get job arguments
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
+# Initialize GlueContext and Spark session
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# Define API sources and corresponding Redshift table schema
+api_sources = {
+    "certificationapplicationapplicationids": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "applicationid"]
+    },
+    "certificationapplicationnewhireids": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "newhireid"]
+    },
+    "certificationapplicationrankinglistids": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "rankinglistid"]
+    },
+    "certificationapplicationrequestsids": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "requestid"]
+    }
+}
+
+# S3 folder path
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
+
+# Loop through each API source and filter files
+for api_name, config in api_sources.items():
+    # Define regex pattern to match the correct files for this API source
+    file_pattern = re.compile(f"^{api_name}.*\\.csv$", re.IGNORECASE)
+
+    # Read all files from S3, but filter only those matching the pattern
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        format="csv",
+        format_options={"withHeader": True, "separator": ","},
+        connection_options={
+            "paths": [s3_path],  # Read all files
+            "recurse": True,
+            "exclusions": ["^(?!.*" + api_name + ").*"]  # Exclude files that don't match
+        },
+        transformation_ctx=f"AmazonS3_{api_name}"
+    )
+
+    # Write data to Amazon Redshift
+    glueContext.write_dynamic_frame.from_options(
+        frame=dynamic_frame,
+        connection_type="redshift",
+        connection_options={
+            "redshiftTmpDir": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
+            "useConnectionProperties": "True",
+            "dbtable": f"usastaffing_staging.{api_name}",
+            "connectionName": "hcd_dev_redshift_connection",
+            "preactions": f"""
+                CREATE TABLE IF NOT EXISTS usastaffing_staging.{api_name} (
+                    tenantid VARCHAR, 
+                    CA_rankinglistid VARCHAR, 
+                    CA_applicationid VARCHAR, 
+                    {config["headers"][-1]} VARCHAR
+                ); 
+                TRUNCATE TABLE usastaffing_staging.{api_name};
+            """
+        },
+        transformation_ctx=f"AmazonRedshift_{api_name}"
+    )
+
+# Commit the job
+job.commit()

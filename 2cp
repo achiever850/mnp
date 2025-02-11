@@ -1,0 +1,79 @@
+import sys
+from awsglue.transforms import * 
+from awsglue.utils import getResolvedOptions 
+from pyspark.context import SparkContext 
+from awsglue.context import GlueContext 
+from awsglue.job import Job 
+from awsglue import DynamicFrame
+
+# Get job arguments
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
+# Initialize GlueContext and Spark session
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# Define API sources with updated folder structure
+api_sources = {
+    "certificationapplicationapplicationids": ["tenantid", "CA_rankinglistid", "CA_applicationid", "applicationid"],
+    "certificateapplicationnewhireids": ["tenantid", "CA_rankinglistid", "CA_applicationid", "newhireid"],
+    "certificateapplicationrankinglistids": ["tenantid", "CA_rankinglistid", "CA_applicationid", "rankinglistid"],
+    "certificateapplicationRequestIDs": ["tenantid", "CA_rankinglistid", "CA_applicationid", "requestid"],
+    # TimeToHire sources - assume they are in a different folder
+    "timeTohireAnnouncementIDS": ["tenantid", "announcementid", "vacancyid", "date"],
+    "timetoHireCustomerids": ["tenantid", "customerid", "newhireid", "vacancyid"],
+    "timetoHireNewHireIDS": ["tenantid", "newhireid", "vacancyid", "hiredate"],
+    "timetoHireOrganizationids": ["tenantid", "organizationid", "vacancyid", "date"],
+    "timetoHireRequestIDS": ["tenantid", "requestid", "vacancyid", "date"],
+    "timeToHireVacancyIDS": ["tenantid", "vacancyid", "jobid", "date"]
+}
+
+# Loop through each API source
+for api_name, headers in api_sources.items():
+    # Define path based on the folder structure for the files
+    if api_name.startswith("timeTohire"):  # Check if it's a timeToHire file
+        path = f"s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/time_to_hire/{api_name}/"
+    else:
+        path = f"s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/certificate_application_external_id/{api_name}/"
+    
+    # Read CSV from S3
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        format="csv",
+        format_options={"withHeader": True, "separator": ","},
+        connection_options={
+            "paths": [path],
+            "recurse": True
+        },
+        transformation_ctx=f"AmazonS3_{api_name}"
+    )
+
+    # Define table structure explicitly for Redshift
+    create_table_stmt = f"""
+        CREATE TABLE IF NOT EXISTS usastaffing_staging.{api_name} (
+            tenantid VARCHAR(50), 
+            CA_rankinglistid VARCHAR(50), 
+            CA_applicationid VARCHAR(50), 
+            {headers[-1]} VARCHAR(50)
+        );
+    """
+
+    # Write to Amazon Redshift
+    glueContext.write_dynamic_frame.from_options(
+        frame=dynamic_frame, 
+        connection_type="redshift",
+        connection_options={
+            "redshiftTmpDir": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
+            "useConnectionProperties": "True",
+            "dbtable": f"usastaffing_staging.{api_name}",
+            "connectionName": "hcd_dev_redshift_connection",
+            "preactions": create_table_stmt
+        },
+        transformation_ctx=f"AmazonRedshift_{api_name}"
+    )
+
+# Commit the job
+job.commit()

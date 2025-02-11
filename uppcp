@@ -1,0 +1,88 @@
+import sys
+from awsglue.transforms import * 
+from awsglue.utils import getResolvedOptions 
+from pyspark.context import SparkContext 
+from awsglue.context import GlueContext 
+from awsglue.job import Job 
+from awsglue import DynamicFrame
+
+# Get job arguments
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
+# Initialize GlueContext and Spark session
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# Define API sources
+api_sources = {
+    "certificateapplicationnewhireIDs": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "newhireid"],
+        "redshift_table_name": "certificateapplicationnewhireID"
+    },
+    "certificateapplicationapplicationIDs": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "applicationid"],
+        "redshift_table_name": "certificateapplicationapplicationID"
+    },
+    "certificateapplicationRankinglistIDs": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "rankinglistid"],
+        "redshift_table_name": "certificateapplicationRankinglistID"
+    },
+    "certificateapplicationrequestsIDs": {
+        "headers": ["tenantid", "CA_rankinglistid", "CA_applicationid", "requestid"],
+        "redshift_table_name": "certificateapplicationrequestsID"
+    }
+}
+
+# Create tables in Redshift before running the Glue job (outside the loop)
+for api_name, config in api_sources.items():
+    # Define the table schema (ensure to adjust the types as per your requirements)
+    create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS usastaffing_staging.{config["redshift_table_name"]} (
+            tenantid VARCHAR, 
+            CA_rankinglistid VARCHAR, 
+            CA_applicationid VARCHAR, 
+            {config["headers"][-1]} VARCHAR
+        );
+    """
+    # Execute the CREATE TABLE SQL (outside the loop in Redshift)
+    # You can use a Redshift connector or AWS SDK to run this SQL
+
+# Loop through each API source
+for api_name, config in api_sources.items():
+    # Read CSV from S3
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        format="csv",
+        format_options={"withHeader": True, "separator": ","},
+        connection_options={
+            "paths": [f"s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/{api_name}/"],
+            "recurse": True
+        },
+        transformation_ctx=f"AmazonS3_{api_name}"
+    )
+
+    # Write to Amazon Redshift with updated table names
+    glueContext.write_dynamic_frame.from_options(
+        frame=dynamic_frame, 
+        connection_type="redshift",
+        connection_options={
+            "redshiftTmpDir": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
+            "useConnectionProperties": True,  # Corrected as Boolean
+            "dbtable": f"usastaffing_staging.{config['redshift_table_name']}",
+            "connectionName": "hcd_dev_redshift_connection",
+            "preactions": f"""
+                DO $$ BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'usastaffing_staging' AND table_name = '{config['redshift_table_name']}') THEN
+                        TRUNCATE TABLE usastaffing_staging.{config['redshift_table_name']};
+                    END IF;
+                END $$;
+            """
+        },
+        transformation_ctx=f"AmazonRedshift_{api_name}"
+    )
+
+# Commit the job
+job.commit()

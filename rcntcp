@@ -35,6 +35,7 @@ for folder_name, redshift_table, unique_id in csv_folders:
 
     # Construct the path for the folder
     folder_path = f"{s3_path}{folder_name}/"
+    print(f"Reading from folder: {folder_path}")
 
     # Read CSV files from the folder
     dynamic_frame = glueContext.create_dynamic_frame.from_options(
@@ -50,6 +51,13 @@ for folder_name, redshift_table, unique_id in csv_folders:
     df.printSchema()
     print(f"Sample Data from {folder_name}:")
     df.show(5)
+
+    # Check if DataFrame is empty
+    record_count = df.count()
+    print(f"Number of records read from S3: {record_count}")
+    if record_count == 0:
+        print(f"No data found in {folder_name}, skipping...")
+        continue
 
     # Convert DataFrame back to DynamicFrame
     transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")

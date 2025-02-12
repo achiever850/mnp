@@ -14,24 +14,26 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-# Define S3 and Redshift configurations
+# S3 and Redshift Configurations
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
-redshift_connection = "your-redshift-connection-name"  # Name of the Glue Redshift connection
-redshift_temp_dir = "s3://your-temp-bucket/temp-dir/"  # Temporary directory for Redshift
-redshift_database = "hcd-dev-db"  # Redshift database name
-redshift_schema = "usastaffing_staging"  # Redshift schema name
+redshift_connection = "your-redshift-connection-name"  # Glue connection name
+redshift_temp_dir = "s3://your-temp-bucket/temp-dir/"
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
 
-# List of CSV files and their corresponding Redshift tables
+# File Mapping: (CSV File Name, Redshift Table, Unique Column)
 csv_files = [
-    ("certificateapplicationapplicationIDs.csv", "certificateapplicationapplicationID"),
-    ("certificateapplicationnewhireIDs.csv", "certificateapplicationnewhireID"),
-    ("certificateapplicationRankinglistIDs.csv", "certificateapplicationRankinglistID"),
-    ("certificateapplicationrequestsIDs.csv", "certificateapplicationrequestsID")
+    ("certificateapplicationapplicationIDs.csv", "certificateapplicationapplicationID", "applicationid"),
+    ("certificateapplicationnewhireIDs.csv", "certificateapplicationnewhireID", "newhireid"),
+    ("certificateapplicationRankinglistIDs.csv", "certificateapplicationRankinglistID", "rankinglistid"),
+    ("certificateapplicationrequestsIDs.csv", "certificateapplicationrequestsID", "requestsid")
 ]
 
-# Process each CSV file
-for csv_file, redshift_table in csv_files:
-    # Read CSV file from S3
+# Process Each File
+for csv_file, redshift_table, unique_id in csv_files:
+    print(f"Processing {csv_file} → {redshift_table}")
+
+    # Read CSV from S3
     dynamic_frame = glueContext.create_dynamic_frame.from_options(
         connection_type="s3",
         connection_options={"paths": [f"{s3_path}{csv_file}"]},
@@ -39,38 +41,35 @@ for csv_file, redshift_table in csv_files:
         format_options={"withHeader": True, "separator": ","}
     )
 
-    # Convert DynamicFrame to DataFrame for additional transformations (if needed)
+    # Convert to DataFrame and Show Sample Data
     df = dynamic_frame.toDF()
-
-    # Example: Print schema and show sample data
     print(f"Schema for {csv_file}:")
     df.printSchema()
-    print(f"Sample data from {csv_file}:")
+    print(f"Sample Data from {csv_file}:")
     df.show(5)
 
     # Convert DataFrame back to DynamicFrame
     transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")
 
-    # Write data to Redshift
-    print(f"Writing data to Redshift table: {redshift_schema}.{redshift_table}")
+    # Write to Redshift
+    print(f"Writing to Redshift Table: {redshift_schema}.{redshift_table}")
     glueContext.write_dynamic_frame.from_jdbc_conf(
         frame=transformed_frame,
         catalog_connection=redshift_connection,
         connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",  # Schema and table name
-            "database": redshift_database,  # Redshift database name
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "database": redshift_database,
             "preactions": f"""
-                DROP TABLE IF EXISTS {redshift_schema}.{redshift_table};
-                CREATE TABLE {redshift_schema}.{redshift_table} (
-                    tenantid VARCHAR,
-                    CA_rankinglistid VARCHAR,
-                    CA_applicationid VARCHAR,
-                    {redshift_table.split('ID')[0].split('certificateapplication')[-1].lower()}id VARCHAR
+                CREATE TABLE IF NOT EXISTS {redshift_schema}.{redshift_table} (
+                    tenantid VARCHAR(255),
+                    CA_rankinglistid VARCHAR(255),
+                    CA_applicationid VARCHAR(255),
+                    {unique_id} VARCHAR(255)
                 );
             """
         },
         redshift_tmp_dir=redshift_temp_dir
     )
 
-# Commit the job
+# Commit Job
 job.commit()

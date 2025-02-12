@@ -17,8 +17,9 @@ job.init(args["JOB_NAME"], args)
 # Define S3 and Redshift configurations
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
 redshift_connection = "your-redshift-connection-name"  # Name of the Glue Redshift connection
-redshift_table = "certificateapplicationapplicationID"  # Target Redshift table
 redshift_temp_dir = "s3://your-temp-bucket/temp-dir/"  # Temporary directory for Redshift
+redshift_database = "hcd-dev-db"  # Redshift database name
+redshift_schema = "usastaffing_staging"  # Redshift schema name
 
 # List of CSV files and their corresponding Redshift tables
 csv_files = [
@@ -42,20 +43,31 @@ for csv_file, redshift_table in csv_files:
     df = dynamic_frame.toDF()
 
     # Example: Print schema and show sample data
+    print(f"Schema for {csv_file}:")
     df.printSchema()
+    print(f"Sample data from {csv_file}:")
     df.show(5)
 
     # Convert DataFrame back to DynamicFrame
     transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")
 
     # Write data to Redshift
+    print(f"Writing data to Redshift table: {redshift_schema}.{redshift_table}")
     glueContext.write_dynamic_frame.from_jdbc_conf(
         frame=transformed_frame,
         catalog_connection=redshift_connection,
         connection_options={
-            "dbtable": redshift_table,
-            "database": "your_redshift_database",  # Replace with your Redshift database name
-            "preactions": f"DROP TABLE IF EXISTS {redshift_table}; CREATE TABLE {redshift_table} (tenantid VARCHAR, CA_rankinglistid VARCHAR, CA_applicationid VARCHAR, applicationid VARCHAR);"
+            "dbtable": f"{redshift_schema}.{redshift_table}",  # Schema and table name
+            "database": redshift_database,  # Redshift database name
+            "preactions": f"""
+                DROP TABLE IF EXISTS {redshift_schema}.{redshift_table};
+                CREATE TABLE {redshift_schema}.{redshift_table} (
+                    tenantid VARCHAR,
+                    CA_rankinglistid VARCHAR,
+                    CA_applicationid VARCHAR,
+                    {redshift_table.split('ID')[0].split('certificateapplication')[-1].lower()}id VARCHAR
+                );
+            """
         },
         redshift_tmp_dir=redshift_temp_dir
     )

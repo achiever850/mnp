@@ -5,6 +5,7 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
+import boto3
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -26,7 +27,7 @@ folders = [
     ("certificateApplicationApplicationIDs", "certificateapplicationapplicationID", "applicationid"),
     ("certificateApplicationNewHireIDs", "certificateapplicationnewhireID", "newhireid"),
     ("certificateApplicationRankinglistIDs", "certificateapplicationRankinglistID", "rankinglistid"),
-    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsID", "requestsid")
+    ("certificateApplicationRequestIDs", "certificateapplicationrequestID", "requestsid")  
 ]
 
 # Process Each Folder
@@ -36,6 +37,19 @@ for folder, redshift_table, unique_id in folders:
     # Construct the full S3 path to the folder
     folder_path = f"{s3_path}{folder}/"  # E.g., s3://your-bucket/your-folder/
     print(f"Full S3 Folder Path: {folder_path}")
+
+    # Check if folder exists and contains CSV files
+    s3_client = boto3.client('s3')
+    bucket_name = "hcd-ec2-windows-servers-file-transfer-bucket"
+    try:
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"usa_staffing_csv/external_id_csv/{folder}/")
+        files = response.get('Contents', [])
+        if not files:
+            print(f"Warning: No files found in folder {folder}")
+            continue  # Skip to the next folder if no files are found
+    except Exception as e:
+        print(f"Error accessing S3 folder {folder}: {e}")
+        continue
 
     # Read CSV from S3
     dynamic_frame = glueContext.create_dynamic_frame.from_options(
@@ -52,28 +66,35 @@ for folder, redshift_table, unique_id in folders:
     print(f"Sample Data from {folder}:")
     df.show(5)
 
-    # Create a Redshift table dynamically based on the schema of the DataFrame
+    # Create Redshift table dynamically based on the schema of the DataFrame
     columns = ', '.join([f"{col} VARCHAR(255)" for col in df.columns])  # Create column definitions dynamically
     
-    # Create Redshift table if not exists
-    create_table_query = f"""
-    CREATE TABLE IF NOT EXISTS {redshift_schema}.{redshift_table} (
-        {columns}
-    );
-    """
-    print(f"Creating Redshift Table with Query: {create_table_query}")
-    
-    # Execute the dynamic CREATE TABLE query
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": create_table_query
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
+    # Check if the table already exists in Redshift
+    redshift_conn = glueContext.spark_session.read.format("jdbc").option("url", f"jdbc:redshift://{redshift_connection}/").option("dbtable", f"information_schema.tables").option("user", "your_redshift_user").option("password", "your_redshift_password").load()
+    table_exists = redshift_conn.filter(f"table_schema = '{redshift_schema}' AND table_name = '{redshift_table}'").count() > 0
+
+    if not table_exists:
+        # Create Redshift table if it doesn't exist
+        create_table_query = f"""
+        CREATE TABLE {redshift_schema}.{redshift_table} (
+            {columns}
+        );
+        """
+        print(f"Creating Redshift Table with Query: {create_table_query}")
+        
+        # Execute the dynamic CREATE TABLE query
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": f"{redshift_schema}.{redshift_table}",
+                "database": redshift_database,
+                "preactions": create_table_query
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+    else:
+        print(f"Redshift Table {redshift_table} already exists. Skipping table creation.")
 
     # Convert DataFrame back to DynamicFrame
     transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")

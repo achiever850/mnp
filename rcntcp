@@ -1,100 +1,64 @@
 import sys
-from awsglue.transforms import * 
-from awsglue.utils import getResolvedOptions 
-from pyspark.context import SparkContext 
-from awsglue.context import GlueContext 
-from awsglue.job import Job 
-from awsglue import DynamicFrame
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
 
-# Get job arguments
+# Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-
-# Initialize GlueContext and Spark session
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-# Define API sources in the required order
-api_sources = [
-    "certificateapplicationapplicationIDs",
-    "certificateapplicationnewhireIDs",
-    "certificateapplicationRankinglistIDs",
-    "certificateapplicationrequestsIDs"
+# Define S3 and Redshift configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
+redshift_connection = "your-redshift-connection-name"  # Name of the Glue Redshift connection
+redshift_table = "certificateapplicationapplicationID"  # Target Redshift table
+redshift_temp_dir = "s3://your-temp-bucket/temp-dir/"  # Temporary directory for Redshift
+
+# List of CSV files and their corresponding Redshift tables
+csv_files = [
+    ("certificateapplicationapplicationIDs.csv", "certificateapplicationapplicationID"),
+    ("certificateapplicationnewhireIDs.csv", "certificateapplicationnewhireID"),
+    ("certificateapplicationRankinglistIDs.csv", "certificateapplicationRankinglistID"),
+    ("certificateapplicationrequestsIDs.csv", "certificateapplicationrequestsID")
 ]
 
-# Loop through each API source
-for api_name in api_sources:
-    # Read CSV from S3
-    try:
-        print(f"Reading data for {api_name} from S3...")
-        dynamic_frame = glueContext.create_dynamic_frame.from_options(
-            connection_type="s3",
-            format="csv",
-            format_options={"withHeader": True, "separator": ","},
-            connection_options={
-                "paths": [f"s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/{api_name}/"],
-                "recurse": True
-            },
-            transformation_ctx=f"AmazonS3_{api_name}"
-        )
-        
-        # Log the number of records read
-        record_count = dynamic_frame.count()
-        print(f"Read {record_count} records for API: {api_name}.")
+# Process each CSV file
+for csv_file, redshift_table in csv_files:
+    # Read CSV file from S3
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        connection_options={"paths": [f"{s3_path}{csv_file}"]},
+        format="csv",
+        format_options={"withHeader": True, "separator": ","}
+    )
 
-        if record_count == 0:
-            print(f"No records found for API: {api_name}. Skipping...")
-            continue  # Skip if no records found
+    # Convert DynamicFrame to DataFrame for additional transformations (if needed)
+    df = dynamic_frame.toDF()
 
-        # Define the relevant columns based on the API name (headers may need to be adjusted)
-        if api_name == "certificateapplicationapplicationIDs":
-            dynamic_frame = dynamic_frame.select_fields(["tenantid", "CA_rankinglistid", "CA_applicationid", "applicationid"])
-        elif api_name == "certificateapplicationnewhireIDs":
-            dynamic_frame = dynamic_frame.select_fields(["tenantid", "CA_rankinglistid", "CA_applicationid", "newhireid"])
-        elif api_name == "certificateapplicationRankinglistIDs":
-            dynamic_frame = dynamic_frame.select_fields(["tenantid", "CA_rankinglistid", "CA_applicationid", "rankinglistid"])
-        elif api_name == "certificateapplicationrequestsIDs":
-            dynamic_frame = dynamic_frame.select_fields(["tenantid", "CA_rankinglistid", "CA_applicationid", "requestid"])
+    # Example: Print schema and show sample data
+    df.printSchema()
+    df.show(5)
 
-        # Log the number of records after selecting fields
-        selected_count = dynamic_frame.count()
-        print(f"After selecting fields, {selected_count} records remain for API: {api_name}.")
+    # Convert DataFrame back to DynamicFrame
+    transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")
 
-        if selected_count == 0:
-            print(f"No relevant fields found for API: {api_name}. Skipping...")
-            continue  # Skip if no relevant fields remain
-
-    except Exception as e:
-        print(f"Error reading data from S3 for API: {api_name} - {str(e)}")
-        continue  # Skip this API if error occurs during data reading
-
-    # Write to Amazon Redshift
-    try:
-        print(f"Writing data to Redshift for API: {api_name}...")
-        glueContext.write_dynamic_frame.from_options(
-            frame=dynamic_frame, 
-            connection_type="redshift",
-            connection_options={
-                "redshiftTmpDir": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
-                "useConnectionProperties": True,  # Corrected as Boolean
-                "dbtable": f"usastaffing_staging.{api_name.replace('IDs', 'ID')}",
-                "connectionName": "hcd_dev_redshift_connection",
-                "preactions": f"""
-                    DO $$ BEGIN
-                        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'usastaffing_staging' AND table_name = '{api_name.replace('IDs', 'ID')}') THEN
-                            TRUNCATE TABLE usastaffing_staging.{api_name.replace('IDs', 'ID')};
-                        END IF;
-                    END $$;
-                """
-            },
-            transformation_ctx=f"AmazonRedshift_{api_name}"
-        )
-        print(f"Data successfully written to Redshift for API: {api_name}")
-
-    except Exception as e:
-        print(f"Error writing data to Redshift for API: {api_name} - {str(e)}")
+    # Write data to Redshift
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=transformed_frame,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": "your_redshift_database",  # Replace with your Redshift database name
+            "preactions": f"DROP TABLE IF EXISTS {redshift_table}; CREATE TABLE {redshift_table} (tenantid VARCHAR, CA_rankinglistid VARCHAR, CA_applicationid VARCHAR, applicationid VARCHAR);"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
 
 # Commit the job
 job.commit()

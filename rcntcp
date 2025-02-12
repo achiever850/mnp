@@ -26,7 +26,15 @@ folders = [
     ("certificateApplicationApplicationIDs", "certificateapplicationapplicationID", "applicationid"),
     ("certificateApplicationNewHireIDs", "certificateapplicationnewhireID", "newhireid"),
     ("certificateApplicationRankinglistIDs", "certificateapplicationRankinglistID", "rankinglistid"),
-    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsID", "requestsid")
+    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsID", "requestsid"),
+    # New folders to load
+    ("timeToHireAnnouncementIDs", "timetohireannouncementID", "announcementid"),
+    ("timeToHireCustomerIDs", "timetohirecustomerID", "customerid"),
+    ("timeToHireNewHireIDs", "timetohirenewhireID", "newhireid"),
+    ("timeToHireOfficeIDs", "timetohireofficeID", "officeid"),
+    ("timeToHireOrganizationIDs", "timetohireorganizationID", "orgid"),
+    ("timeToHireRequestIDs", "timetohirerequestID", "requestid"),
+    ("timeToHireVacancyIDs", "timetohirevacancyID", "vacancyid")
 ]
 
 # Process Each Folder

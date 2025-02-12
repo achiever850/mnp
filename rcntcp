@@ -21,56 +21,71 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# Folder names under 'external_id_csv' where CSV files are stored
+# List of Folders (and corresponding Redshift tables) to process
 folders = [
-    "certificateApplicationApplicationIDs",  # Folder name inside external_id_csv
-    "certificateApplicationNewHireIDs",
-    "certificateApplicationRankingListIDs",
-    "certificateApplicationRequestsIDs"
+    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationID", "applicationid"),
+    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireID", "newhireid"),
+    ("certificateApplicationRankinglistIDs", "certificateapplicationRankinglistID", "rankinglistid"),
+    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsID", "requestsid")
 ]
 
 # Process Each Folder
-for folder in folders:
-    print(f"Processing folder: {folder}")
-
+for folder, redshift_table, unique_id in folders:
+    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+    
     # Construct the full S3 path to the folder
-    folder_path = f"{s3_path}{folder}/"
+    folder_path = f"{s3_path}{folder}/"  # E.g., s3://your-bucket/your-folder/
+    print(f"Full S3 Folder Path: {folder_path}")
 
-    # Read CSV from S3 using the folder path
+    # Read CSV from S3
     dynamic_frame = glueContext.create_dynamic_frame.from_options(
         connection_type="s3",
-        connection_options={"paths": [folder_path]},  # Folder path specified
+        connection_options={"paths": [folder_path]},
         format="csv",
         format_options={"withHeader": True, "separator": ","}
     )
 
-    # Convert to DataFrame and Show Sample Data
+    # Convert to DataFrame and Show Schema and Sample Data
     df = dynamic_frame.toDF()
     print(f"Schema for {folder}:")
     df.printSchema()
     print(f"Sample Data from {folder}:")
     df.show(5)
 
+    # Create a Redshift table dynamically based on the schema of the DataFrame
+    columns = ', '.join([f"{col} VARCHAR(255)" for col in df.columns])  # Create column definitions dynamically
+    
+    # Create Redshift table if not exists
+    create_table_query = f"""
+    CREATE TABLE IF NOT EXISTS {redshift_schema}.{redshift_table} (
+        {columns}
+    );
+    """
+    print(f"Creating Redshift Table with Query: {create_table_query}")
+    
+    # Execute the dynamic CREATE TABLE query
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=dynamic_frame,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "database": redshift_database,
+            "preactions": create_table_query
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+
     # Convert DataFrame back to DynamicFrame
     transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")
 
-    # Write to Redshift
-    redshift_table = folder.split("/")[-1]  # Using the folder name as the table name
+    # Write data to Redshift (after creating the table)
     print(f"Writing data to Redshift Table: {redshift_schema}.{redshift_table}")
     glueContext.write_dynamic_frame.from_jdbc_conf(
         frame=transformed_frame,
         catalog_connection=redshift_connection,
         connection_options={
             "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": f"""
-                CREATE TABLE IF NOT EXISTS {redshift_schema}.{redshift_table} (
-                    tenantid VARCHAR(255),
-                    CA_rankinglistid VARCHAR(255),
-                    CA_applicationid VARCHAR(255),
-                    uniqueid VARCHAR(255)
-                );
-            """
+            "database": redshift_database
         },
         redshift_tmp_dir=redshift_temp_dir
     )

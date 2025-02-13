@@ -1,15 +1,13 @@
 import sys
 from awsglue.transforms import *
 from awsglue.context import GlueContext
-from awsglue.job import Job
 from pyspark.context import SparkContext
+from pyspark.sql import SparkSession
 
 # Initialize SparkContext and GlueContext
 sc = SparkContext()
 glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-job = Job(glueContext)
-job.init(args=sys.argv, argv=sys.argv)
+spark = SparkSession.builder.getOrCreate()  # Create a SparkSession
 
 # Define S3 path and Redshift connection details
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
@@ -38,7 +36,7 @@ def create_table_if_not_exists(table_name, column_definitions):
             {column_definitions}
         )
     """
-    glueContext.pyspark_sql(query).collect()
+    spark.sql(query).collect()
 
 # Function to load data into Redshift
 def load_data_into_redshift(folder, table_name):
@@ -59,7 +57,7 @@ def load_data_into_redshift(folder, table_name):
     
     # Truncate the Redshift table before loading new data
     truncate_query = f"TRUNCATE {redshift_schema}.{table_name}"
-    glueContext.pyspark_sql(truncate_query).collect()
+    spark.sql(truncate_query).collect()
     
     # Convert to DynamicFrame for loading into Redshift
     dyf = glueContext.create_dynamic_frame.from_df(df, "dyf")
@@ -97,5 +95,3 @@ def get_redshift_type(data_type):
 # Load data for each folder and corresponding table
 for folder, table_name in folders_and_tables.items():
     load_data_into_redshift(folder, table_name)
-
-job.commit()

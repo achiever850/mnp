@@ -82,5 +82,3 @@ def get_redshift_type(data_type):
 # Load data for each folder and corresponding table
 for folder, table_name in folders_and_tables.items():
     load_data_into_redshift(folder, table_name)
-
-# No job.commit() is needed here since we are not explicitly creating a Job object.

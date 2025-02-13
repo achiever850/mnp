@@ -1,0 +1,101 @@
+import sys
+from awsglue.transforms import *
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark.context import SparkContext
+
+# Initialize SparkContext and GlueContext
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args=sys.argv, argv=sys.argv)
+
+# Define S3 path and Redshift connection details
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
+
+# List of folders and their corresponding Redshift table names
+folders_and_tables = {
+    "announcements": "announcement",
+    "certificateapplications": "certificate_application",
+    "certificates": "certificate",
+    "customers": "customer",
+    "newhires": "new_hire",
+    "offices": "office",
+    "organizations": "organization",
+    "requests": "request",
+    "tth": "tth"
+}
+
+# Function to create a table in Redshift dynamically
+def create_table_if_not_exists(table_name, column_definitions):
+    query = f"""
+        CREATE TABLE IF NOT EXISTS {redshift_schema}.{table_name} (
+            {column_definitions}
+        )
+    """
+    glueContext.pyspark_sql(query).collect()
+
+# Function to load data into Redshift
+def load_data_into_redshift(folder, table_name):
+    # Define the S3 path for the current folder
+    folder_s3_path = f"{s3_path}{folder}/"
+    
+    # Read CSV data from S3
+    df = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load(folder_s3_path)
+    
+    # Get the schema from the DataFrame to create column definitions
+    schema = df.schema
+    
+    # Create a string representing the column definitions for the Redshift table
+    column_definitions = ", ".join([f"{field.name} {get_redshift_type(field.dataType)}" for field in schema.fields])
+    
+    # Create the table in Redshift if it doesn't exist
+    create_table_if_not_exists(table_name, column_definitions)
+    
+    # Truncate the Redshift table before loading new data
+    truncate_query = f"TRUNCATE {redshift_schema}.{table_name}"
+    glueContext.pyspark_sql(truncate_query).collect()
+    
+    # Convert to DynamicFrame for loading into Redshift
+    dyf = glueContext.create_dynamic_frame.from_df(df, "dyf")
+    
+    # Load data into Redshift
+    glueContext.write_dynamic_frame.from_jdbc_conf(dyf, 
+                                                  connection_name=redshift_connection, 
+                                                  connection_options={
+                                                      "dbtable": f"{redshift_schema}.{table_name}",
+                                                      "database": redshift_database,
+                                                      "tempdir": redshift_temp_dir
+                                                  })
+
+# Helper function to map Spark data types to Redshift data types
+def get_redshift_type(data_type):
+    if data_type == 'StringType()':
+        return 'VARCHAR(255)'
+    elif data_type == 'IntegerType()':
+        return 'INT'
+    elif data_type == 'LongType()':
+        return 'BIGINT'
+    elif data_type == 'FloatType()':
+        return 'FLOAT'
+    elif data_type == 'DoubleType()':
+        return 'DOUBLE PRECISION'
+    elif data_type == 'BooleanType()':
+        return 'BOOLEAN'
+    elif data_type == 'TimestampType()':
+        return 'TIMESTAMP'
+    elif data_type == 'DateType()':
+        return 'DATE'
+    else:
+        return 'VARCHAR(255)'  # Default to VARCHAR for unknown types
+
+# Load data for each folder and corresponding table
+for folder, table_name in folders_and_tables.items():
+    load_data_into_redshift(folder, table_name)
+
+job.commit()

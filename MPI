@@ -47,7 +47,7 @@ def load_data_into_redshift(folder, table_name):
     # You can create the schema and table using Redshift SQL commands.
     
     # Convert to DynamicFrame for loading into Redshift
-    dyf = glueContext.create_dynamic_frame.from_df(df, "dyf")
+    dyf = glueContext.create_dynamic_frame.from_df(df, "dyf", transformation_ctx="dyf")
     
     # Load data into Redshift
     glueContext.write_dynamic_frame.from_jdbc_conf(dyf, 

@@ -7,7 +7,7 @@ from pyspark.sql import SparkSession
 # Initialize SparkContext and GlueContext
 sc = SparkContext()
 glueContext = GlueContext(sc)
-spark = SparkSession.builder.getOrCreate()  # Create a SparkSession
+spark = SparkSession.builder.getOrCreate()
 
 # Define S3 path and Redshift connection details
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
@@ -29,15 +29,6 @@ folders_and_tables = {
     "tth": "tth"
 }
 
-# Function to create a table in Redshift dynamically
-def create_table_if_not_exists(table_name, column_definitions):
-    query = f"""
-        CREATE TABLE IF NOT EXISTS {redshift_schema}.{table_name} (
-            {column_definitions}
-        )
-    """
-    spark.sql(query).collect()
-
 # Function to load data into Redshift
 def load_data_into_redshift(folder, table_name):
     # Define the S3 path for the current folder
@@ -52,12 +43,8 @@ def load_data_into_redshift(folder, table_name):
     # Create a string representing the column definitions for the Redshift table
     column_definitions = ", ".join([f"{field.name} {get_redshift_type(field.dataType)}" for field in schema.fields])
     
-    # Create the table in Redshift if it doesn't exist
-    create_table_if_not_exists(table_name, column_definitions)
-    
-    # Truncate the Redshift table before loading new data
-    truncate_query = f"TRUNCATE {redshift_schema}.{table_name}"
-    spark.sql(truncate_query).collect()
+    # Note: Ensure the schema and table exist before loading data.
+    # You can create the schema and table using Redshift SQL commands.
     
     # Convert to DynamicFrame for loading into Redshift
     dyf = glueContext.create_dynamic_frame.from_df(df, "dyf")
@@ -95,3 +82,5 @@ def get_redshift_type(data_type):
 # Load data for each folder and corresponding table
 for folder, table_name in folders_and_tables.items():
     load_data_into_redshift(folder, table_name)
+
+# No job.commit() is needed here since we are not explicitly creating a Job object.

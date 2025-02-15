@@ -17,7 +17,7 @@ job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
 # S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
 redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
@@ -48,15 +48,15 @@ data_type_mapping = {
 
 # Dictionary mapping folders to their NOT NULL columns
 not_null_columns = {
-    "announcements": ["tennantid", "announcementid", "announcementnumber"],
-    "certificateapplications": ["tennantid", "rankinglistid", "applicationid"],
-    "certificates": ["tennantid", "rankinglistid", "certificatenumber"],
-    "customers": ["tennantid", "customerid"],
-    "newhires": ["tennantid", "newhireid"],
-    "offices": ["tennantid", "officeid"],
-    "organizations": ["tennantid", "orgid"],
-    "requests": ["tennantid", "requestid"],
-    "tth": ["tennantid", "requestid"]
+    "announcements": ["tenantId", "announcementid", "announcementnumber"],
+    "certificateapplications": ["tenantId", "rankinglistid", "applicationid"],
+    "certificates": ["tenantId", "rankinglistid", "certificatenumber"],
+    "customers": ["tenantId", "customerid"],
+    "newhires": ["tenantId", "newhireid"],
+    "offices": ["tenantId", "officeid"],
+    "organizations": ["tenantId", "orgid"],
+    "requests": ["tenantId", "requestid"],
+    "tth": ["tenantId", "requestid"]
 }
 
 # Process Each Folder
@@ -95,8 +95,12 @@ for folder, redshift_table in folders:
         
         # Drop rows with null values in NOT NULL columns
         if folder in not_null_columns:
-            df = df.dropna(subset=not_null_columns[folder])
-            print(f"Dropped rows with null values in {not_null_columns[folder]}")
+            existing_columns = [col for col in df.columns if col in not_null_columns[folder]]
+            if existing_columns:
+                df = df.dropna(subset=existing_columns)
+                print(f"Dropped rows with null values in {existing_columns}")
+            else:
+                print(f"No matching NOT NULL columns found for {folder}. Skipping null check.")
 
         # Convert back to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
@@ -106,16 +110,20 @@ for folder, redshift_table in folders:
         print(f"Executing: {truncate_query}")
 
         # Write data to Redshift with truncate option
-        glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame,
-            catalog_connection=redshift_connection,
-            connection_options={
-                "dbtable": f"{redshift_schema}.{redshift_table}",
-                "database": redshift_database,
-                "preactions": truncate_query
-            },
-            redshift_tmp_dir=redshift_temp_dir
-        )
+        try:
+            glueContext.write_dynamic_frame.from_jdbc_conf(
+                frame=dynamic_frame,
+                catalog_connection=redshift_connection,
+                connection_options={
+                    "dbtable": f"{redshift_schema}.{redshift_table}",
+                    "database": redshift_database,
+                    "preactions": truncate_query
+                },
+                redshift_tmp_dir=redshift_temp_dir
+            )
+        except Exception as e:
+            print(f"Error writing to Redshift for folder {folder}: {e}")
+            raise
         
     except Exception as e:
         print(f"Error processing folder {folder}: {e}")

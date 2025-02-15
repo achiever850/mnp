@@ -58,8 +58,7 @@ for folder, redshift_table in table_mappings.items():
         print(f"Sample Data from {folder}:")
         df.show(5)
 
-        # Validate data integrity (optional)
-        # Example: Check if DataFrame is not empty
+        # Check if DataFrame is empty
         if df.count() == 0:
             print(f"No data found in {folder}. Skipping...")
             continue

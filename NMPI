@@ -1,27 +1,27 @@
 import sys
-import boto3
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
-from pyspark.sql import SparkSession
+from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 
-# Initialize Spark, Glue Context, and Job
-args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-spark = SparkSession.builder.config("spark.sql.debug.maxToStringFields", "1000").getOrCreate()
-glueContext = GlueContext(spark)
+# Initialize Glue context and job
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
 job = Job(glueContext)
-job.init(args['JOB_NAME'], args)
+job.init(args["JOB_NAME"], args)
 
-# Redshift connection details
-redshift_conn_name = "hcd_dev_redshift_connection"
+# S3 and Redshift Configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
-redshift_db = "hcd-dev-db"
+redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"  # Updated S3 path
 
-# Table mappings for S3 folder to Redshift table
+# Folder to Redshift Table Mapping
 table_mappings = {
     "announcements": "announcement",
     "certificateapplications": "certificateapplication",
@@ -34,39 +34,44 @@ table_mappings = {
     "requests": "request"
 }
 
-# Iterate through each folder and load data into Redshift
-for folder, table in table_mappings.items():
-    s3_source = f"{s3_path}{folder}/"
-    print(f"Processing {s3_source} -> {table}")
+# Process Each Folder
+for folder, redshift_table in table_mappings.items():
+    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+    
+    # Construct the full S3 path to the folder
+    folder_path = f"{s3_path}{folder}/"
+    print(f"Full S3 Folder Path: {folder_path}")
 
-    # Read CSV data from S3
-    df = spark.read.format("csv") \
-        .option("header", "true") \
-        .option("inferSchema", "true") \
-        .load(s3_source)
-
-    dynamic_frame = DynamicFrame.fromDF(df, glueContext, "dynamic_frame")
-
-    # Truncate Redshift table before loading new data
-    redshift_query = f"TRUNCATE TABLE {redshift_schema}.{table};"
-    redshift_conn = glueContext.write_dynamic_frame.from_options(
-        frame=DynamicFrame.fromDF(spark.sql(f"SELECT '{redshift_query}'"), glueContext, "truncate"),
-        connection_type="redshift",
-        connection_options={"redshiftTmpDir": redshift_temp_dir, "useConnectionProperties": "true", "connectionName": redshift_conn_name},
+    # Read CSV from S3
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        connection_options={"paths": [folder_path]},
+        format="csv",
+        format_options={"withHeader": True, "separator": ","}
     )
 
-    # Load data into Redshift
-    glueContext.write_dynamic_frame.from_options(
+    # Convert to DataFrame
+    df = dynamic_frame.toDF()
+    print(f"Schema for {folder}:")
+    df.printSchema()
+    print(f"Sample Data from {folder}:")
+    df.show(5)
+
+    # Truncate the Redshift table before loading new data
+    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+    print(f"Executing: {truncate_query}")
+
+    # Write data to Redshift with truncate option
+    glueContext.write_dynamic_frame.from_jdbc_conf(
         frame=dynamic_frame,
-        connection_type="redshift",
+        catalog_connection=redshift_connection,
         connection_options={
-            "url": f"jdbc:redshift://{redshift_db}.cluster-xxxxxx.us-gov-west-1.redshift.amazonaws.com:5439/{redshift_db}",
-            "dbtable": f"{redshift_schema}.{table}",
-            "connectionName": redshift_conn_name,
-            "redshiftTmpDir": redshift_temp_dir,
-            "aws_iam_role": "project-hcd-glu-role"
-        }
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "database": redshift_database,
+            "preactions": truncate_query
+        },
+        redshift_tmp_dir=redshift_temp_dir
     )
 
-print("Data Load Complete")
+# Commit Job
 job.commit()

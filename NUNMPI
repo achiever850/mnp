@@ -1,12 +1,8 @@
 import sys
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import col
-from pyspark.sql.types import IntegerType, LongType, FloatType, TimestampType, BooleanType, StringType
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -16,90 +12,103 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-# S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
-redshift_database = "hcd-dev-db"
-redshift_schema = "usastaffing_staging"
+# S3 path
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv"
 
-# List of Folders (and corresponding Redshift tables) to process
+# List of folders to process
 folders = [
-    ("announcements", "Announcement"),
-    ("certificateapplications", "CertificateApplication"),
-    ("certificates", "Certificate"),
-    ("customers", "Customer"),
-    ("newhires", "NewHire"),
-    ("offices", "Office"),
-    ("organizations", "Organization"),
-    ("requests", "Request"),
-    ("tth", "TimeToHire")
+    "announcements",
+    # Add other folders here
 ]
-
-# Dictionary mapping data types to their corresponding PySpark types
-data_type_mapping = {
-    "INT": IntegerType(),
-    "BIGINT": LongType(),
-    "REAL": FloatType(),
-    "TIMESTAMP": TimestampType(),
-    "BOOLEAN": BooleanType(),
-    "VARCHAR": StringType()
-}
 
 # Dictionary mapping folders to their NOT NULL columns
 not_null_columns = {
-    "announcements": ["tenantId", "announcementid", "announcementnumber"],
-    "certificateapplications": ["tenantId", "rankinglistid", "applicationid"],
-    "certificates": ["tenantId", "rankinglistid", "certificatenumber"],
-    "customers": ["tenantId", "customerid"],
-    "newhires": ["tenantId", "newhireid"],
-    "offices": ["tenantId", "officeid"],
-    "organizations": ["tenantId", "orgid"],
-    "requests": ["tenantId", "requestid"],
-    "tth": ["tenantId", "requestid"]
+    "announcements": ["tennantid", "announcement Id", "announcementNumber"],
+    # Add other folders and NOT NULL columns here
 }
 
-def read_data(folder_path):
-    """Read CSV from S3."""
-    return glueContext.create_dynamic_frame.from_options(
-        connection_type="s3",
-        connection_options={"paths": [folder_path]},
-        format="csv",
-        format_options={"withHeader": True, "separator": ","}
-    )
+# Dictionary mapping data types to their corresponding PySpark types
+data_type_mapping = {
+    "tennantid": IntegerType(),
+    "announcement Id": LongType(),
+    "announcementNumber": StringType(),
+    "announcement status": StringType(),
+    "announcementTemplate": StringType(),
+    "salaryType": StringType(),
+    "minimumSalary": FloatType(),
+    "maximumSalary": FloatType(),
+    "notToExceed": StringType(),
+    "totalOpenings": StringType(),
+    "openDate": TimestampType(),
+    "closeDate": TimestampType(),
+    "releasedFlag": BooleanType(),
+    "releaseddatetime": TimestampType(),
+    "applicationLimitSetFlag": BooleanType(),
+    "applicationLimit": IntegerType(),
+    "displayDefaultBenefitsTextFlag": BooleanType(),
+    "externalContactId": LongType(),
+    "externalContactName": StringType(),
+    "externalContactEmail": StringType(),
+    "internalContactId": LongType(),
+    "internalContactName": StringType(),
+    "internalContactEmail": StringType(),
+    "usajobsControlNumber": LongType(),
+    "linkedUSAJOBSCONTROLNUMBER": StringType(),
+    "WhoMayApply": StringType(),
+    "whoMayApplyOverrideText": StringType(),
+    "promotionpotential": StringType(),
+    "usajobstatus": StringType(),
+    "lastmodifieddatetime": TimestampType(),
+    "dwLastModifieddatetime": TimestampType()
+}
 
-def process_data(dynamic_frame, folder):
-    """Process data by converting to DataFrame, casting types, and dropping nulls."""
-    df = dynamic_frame.toDF()
-    print(f"Schema for {folder}:")
-    df.printSchema()
-    print(f"Sample Data from {folder}:")
-    df.show(5)
-
-    # Dynamically cast data types based on a predefined mapping
-    for field in df.schema.fields:
-        if field.name.lower() in [col.lower() for col in df.columns]:
-            if field.dataType.typeName() in data_type_mapping:
-                df = df.withColumn(field.name, col(field.name).cast(data_type_mapping[field.dataType.typeName()]))
-                print(f"Casting column {field.name} to {field.dataType.typeName()}")
-
-    # Drop rows with null values in NOT NULL columns
-    if folder in not_null_columns:
-        existing_columns = [col for col in df.columns if col in not_null_columns[folder]]
-        if existing_columns:
-            df = df.dropna(subset=existing_columns)
-            print(f"Dropped rows with null values in {existing_columns}")
-        else:
-            print(f"No matching NOT NULL columns found for {folder}. Skipping null check.")
-
-    return DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
-
-def write_to_redshift(dynamic_frame, folder, redshift_table):
-    """Write data to Redshift with truncate option."""
-    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-    print(f"Executing: {truncate_query}")
-
+# Process Each Folder
+for folder in folders:
     try:
+        print(f"Processing Folder: {folder}")
+        
+        # Construct the full S3 path to the folder
+        folder_path = f"{s3_path}/{folder}/"
+        print(f"Full S3 Folder Path: {folder_path}")
+
+        # Read CSV from S3
+        dynamic_frame = glueContext.create_dynamic_frame.from_options(
+            connection_type="s3",
+            connection_options={"paths": [folder_path]},
+            format="csv",
+            format_options={"withHeader": True, "separator": ","}
+        )
+
+        # Convert to DataFrame
+        df = dynamic_frame.toDF()
+
+        # Apply data type conversions
+        for column, dtype in data_type_mapping.items():
+            df = df.withColumn(column, col(column).cast(dtype))
+
+        # Drop rows with null values in NOT NULL columns
+        if folder in not_null_columns:
+            existing_columns = [col for col in df.columns if col in not_null_columns[folder]]
+            if existing_columns:
+                df = df.dropna(subset=existing_columns)
+                print(f"Dropped rows with null values in {existing_columns}")
+            else:
+                print(f"No matching NOT NULL columns found for {folder}. Skipping null check.")
+
+        # Convert back to DynamicFrame
+        dynamic_frame = DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
+
+        # Redshift connection details
+        redshift_connection = "your_redshift_connection"
+        redshift_temp_dir = "s3://your-temp-bucket/temporary/"
+        redshift_database = "your_database"
+        redshift_schema = "your_schema"
+        redshift_table = folder.capitalize()  # Convert folder name to table name
+
+        # Truncate the Redshift table before loading new data
+        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+
+        # Write data to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=dynamic_frame,
             catalog_connection=redshift_connection,
@@ -110,22 +119,6 @@ def write_to_redshift(dynamic_frame, folder, redshift_table):
             },
             redshift_tmp_dir=redshift_temp_dir
         )
-    except Exception as e:
-        print(f"Error writing to Redshift for folder {folder}: {e}")
-        raise
-
-# Process Each Folder
-for folder, redshift_table in folders:
-    try:
-        print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-        
-        # Construct the full S3 path to the folder
-        folder_path = f"{s3_path}{folder}/"
-        print(f"Full S3 Folder Path: {folder_path}")
-
-        dynamic_frame = read_data(folder_path)
-        processed_frame = process_data(dynamic_frame, folder)
-        write_to_redshift(processed_frame, folder, redshift_table)
         
     except Exception as e:
         print(f"Error processing folder {folder}: {e}")

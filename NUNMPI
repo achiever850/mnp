@@ -59,6 +59,61 @@ not_null_columns = {
     "tth": ["tenantId", "requestid"]
 }
 
+def read_data(folder_path):
+    """Read CSV from S3."""
+    return glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        connection_options={"paths": [folder_path]},
+        format="csv",
+        format_options={"withHeader": True, "separator": ","}
+    )
+
+def process_data(dynamic_frame, folder):
+    """Process data by converting to DataFrame, casting types, and dropping nulls."""
+    df = dynamic_frame.toDF()
+    print(f"Schema for {folder}:")
+    df.printSchema()
+    print(f"Sample Data from {folder}:")
+    df.show(5)
+
+    # Dynamically cast data types based on a predefined mapping
+    for field in df.schema.fields:
+        if field.name.lower() in [col.lower() for col in df.columns]:
+            if field.dataType.typeName() in data_type_mapping:
+                df = df.withColumn(field.name, col(field.name).cast(data_type_mapping[field.dataType.typeName()]))
+                print(f"Casting column {field.name} to {field.dataType.typeName()}")
+
+    # Drop rows with null values in NOT NULL columns
+    if folder in not_null_columns:
+        existing_columns = [col for col in df.columns if col in not_null_columns[folder]]
+        if existing_columns:
+            df = df.dropna(subset=existing_columns)
+            print(f"Dropped rows with null values in {existing_columns}")
+        else:
+            print(f"No matching NOT NULL columns found for {folder}. Skipping null check.")
+
+    return DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
+
+def write_to_redshift(dynamic_frame, folder, redshift_table):
+    """Write data to Redshift with truncate option."""
+    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+    print(f"Executing: {truncate_query}")
+
+    try:
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": f"{redshift_schema}.{redshift_table}",
+                "database": redshift_database,
+                "preactions": truncate_query
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+    except Exception as e:
+        print(f"Error writing to Redshift for folder {folder}: {e}")
+        raise
+
 # Process Each Folder
 for folder, redshift_table in folders:
     try:
@@ -68,62 +123,9 @@ for folder, redshift_table in folders:
         folder_path = f"{s3_path}{folder}/"
         print(f"Full S3 Folder Path: {folder_path}")
 
-        # Read CSV from S3
-        dynamic_frame = glueContext.create_dynamic_frame.from_options(
-            connection_type="s3",
-            connection_options={"paths": [folder_path]},
-            format="csv",
-            format_options={"withHeader": True, "separator": ","}
-        )
-
-        # Convert to DataFrame
-        df = dynamic_frame.toDF()
-        print(f"Schema for {folder}:")
-        df.printSchema()
-        print(f"Sample Data from {folder}:")
-        df.show(5)
-
-        # Get the schema of the DataFrame
-        schema = df.schema
-        
-        # Dynamically cast data types based on a predefined mapping
-        for field in schema.fields:
-            if field.name.lower() in [col.lower() for col in df.columns]:
-                if field.dataType.typeName() in data_type_mapping:
-                    df = df.withColumn(field.name, col(field.name).cast(data_type_mapping[field.dataType.typeName()]))
-                    print(f"Casting column {field.name} to {field.dataType.typeName()}")
-        
-        # Drop rows with null values in NOT NULL columns
-        if folder in not_null_columns:
-            existing_columns = [col for col in df.columns if col in not_null_columns[folder]]
-            if existing_columns:
-                df = df.dropna(subset=existing_columns)
-                print(f"Dropped rows with null values in {existing_columns}")
-            else:
-                print(f"No matching NOT NULL columns found for {folder}. Skipping null check.")
-
-        # Convert back to DynamicFrame
-        dynamic_frame = DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
-
-        # Truncate the Redshift table before loading new data
-        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-        print(f"Executing: {truncate_query}")
-
-        # Write data to Redshift with truncate option
-        try:
-            glueContext.write_dynamic_frame.from_jdbc_conf(
-                frame=dynamic_frame,
-                catalog_connection=redshift_connection,
-                connection_options={
-                    "dbtable": f"{redshift_schema}.{redshift_table}",
-                    "database": redshift_database,
-                    "preactions": truncate_query
-                },
-                redshift_tmp_dir=redshift_temp_dir
-            )
-        except Exception as e:
-            print(f"Error writing to Redshift for folder {folder}: {e}")
-            raise
+        dynamic_frame = read_data(folder_path)
+        processed_frame = process_data(dynamic_frame, folder)
+        write_to_redshift(processed_frame, folder, redshift_table)
         
     except Exception as e:
         print(f"Error processing folder {folder}: {e}")

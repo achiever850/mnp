@@ -1,0 +1,125 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.functions import col
+from pyspark.sql.types import IntegerType, LongType, FloatType, TimestampType, BooleanType, StringType
+
+# Initialize Glue context and job
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# S3 and Redshift Configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
+redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
+
+# List of Folders (and corresponding Redshift tables) to process
+folders = [
+    ("announcements", "Announcement"),
+    ("certificateapplications", "CertificateApplication"),
+    ("certificates", "Certificate"),
+    ("customers", "Customer"),
+    ("newhires", "NewHire"),
+    ("offices", "Office"),
+    ("organizations", "Organization"),
+    ("requests", "Request"),
+    ("tth", "TimeToHire")
+]
+
+# Dictionary mapping data types to their corresponding PySpark types
+data_type_mapping = {
+    "INT": IntegerType(),
+    "BIGINT": LongType(),
+    "REAL": FloatType(),
+    "TIMESTAMP": TimestampType(),
+    "BOOLEAN": BooleanType(),
+    "VARCHAR": StringType()
+}
+
+# Dictionary mapping folders to their NOT NULL columns
+not_null_columns = {
+    "announcements": ["tennantid", "announcementid", "announcementnumber"],
+    "certificateapplications": ["tennantid", "rankinglistid", "applicationid"],
+    "certificates": ["tennantid", "rankinglistid", "certificatenumber"],
+    "customers": ["tennantid", "customerid"],
+    "newhires": ["tennantid", "newhireid"],
+    "offices": ["tennantid", "officeid"],
+    "organizations": ["tennantid", "orgid"],
+    "requests": ["tennantid", "requestid"],
+    "tth": ["tennantid", "requestid"]
+}
+
+# Process Each Folder
+for folder, redshift_table in folders:
+    try:
+        print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+        
+        # Construct the full S3 path to the folder
+        folder_path = f"{s3_path}{folder}/"
+        print(f"Full S3 Folder Path: {folder_path}")
+
+        # Read CSV from S3
+        dynamic_frame = glueContext.create_dynamic_frame.from_options(
+            connection_type="s3",
+            connection_options={"paths": [folder_path]},
+            format="csv",
+            format_options={"withHeader": True, "separator": ","}
+        )
+
+        # Convert to DataFrame
+        df = dynamic_frame.toDF()
+        print(f"Schema for {folder}:")
+        df.printSchema()
+        print(f"Sample Data from {folder}:")
+        df.show(5)
+
+        # Get the schema of the DataFrame
+        schema = df.schema
+        
+        # Dynamically cast data types based on a predefined mapping
+        for field in schema.fields:
+            if field.name.lower() in [col.lower() for col in df.columns]:
+                if field.dataType.typeName() in data_type_mapping:
+                    df = df.withColumn(field.name, col(field.name).cast(data_type_mapping[field.dataType.typeName()]))
+                    print(f"Casting column {field.name} to {field.dataType.typeName()}")
+        
+        # Drop rows with null values in NOT NULL columns
+        if folder in not_null_columns:
+            df = df.dropna(subset=not_null_columns[folder])
+            print(f"Dropped rows with null values in {not_null_columns[folder]}")
+
+        # Convert back to DynamicFrame
+        dynamic_frame = DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
+
+        # Truncate the Redshift table before loading new data
+        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+        print(f"Executing: {truncate_query}")
+
+        # Write data to Redshift with truncate option
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": f"{redshift_schema}.{redshift_table}",
+                "database": redshift_database,
+                "preactions": truncate_query
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+        
+    except Exception as e:
+        print(f"Error processing folder {folder}: {e}")
+        raise
+
+# Commit Job
+job.commit()

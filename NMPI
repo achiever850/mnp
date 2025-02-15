@@ -36,42 +36,54 @@ table_mappings = {
 
 # Process Each Folder
 for folder, redshift_table in table_mappings.items():
-    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-    
-    # Construct the full S3 path to the folder
-    folder_path = f"{s3_path}{folder}/"
-    print(f"Full S3 Folder Path: {folder_path}")
+    try:
+        print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+        
+        # Construct the full S3 path to the folder
+        folder_path = f"{s3_path}{folder}/"
+        print(f"Full S3 Folder Path: {folder_path}")
 
-    # Read CSV from S3
-    dynamic_frame = glueContext.create_dynamic_frame.from_options(
-        connection_type="s3",
-        connection_options={"paths": [folder_path]},
-        format="csv",
-        format_options={"withHeader": True, "separator": ","}
-    )
+        # Read CSV from S3
+        dynamic_frame = glueContext.create_dynamic_frame.from_options(
+            connection_type="s3",
+            connection_options={"paths": [folder_path]},
+            format="csv",
+            format_options={"withHeader": True, "separator": ","}
+        )
 
-    # Convert to DataFrame
-    df = dynamic_frame.toDF()
-    print(f"Schema for {folder}:")
-    df.printSchema()
-    print(f"Sample Data from {folder}:")
-    df.show(5)
+        # Convert to DataFrame
+        df = dynamic_frame.toDF()
+        print(f"Schema for {folder}:")
+        df.printSchema()
+        print(f"Sample Data from {folder}:")
+        df.show(5)
 
-    # Truncate the Redshift table before loading new data
-    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-    print(f"Executing: {truncate_query}")
+        # Validate data integrity (optional)
+        # Example: Check if DataFrame is not empty
+        if df.count() == 0:
+            print(f"No data found in {folder}. Skipping...")
+            continue
 
-    # Write data to Redshift with truncate option
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": truncate_query
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
+        # Truncate the Redshift table before loading new data
+        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+        print(f"Executing: {truncate_query}")
+
+        # Write data to Redshift with truncate option
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": f"{redshift_schema}.{redshift_table}",
+                "database": redshift_database,
+                "preactions": truncate_query
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+        
+        print(f"Successfully loaded data into {redshift_table}.")
+
+    except Exception as e:
+        print(f"An error occurred while processing {folder}: {e}")
 
 # Commit Job
 job.commit()

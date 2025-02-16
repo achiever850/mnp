@@ -34,42 +34,50 @@ dyf = glueContext.create_dynamic_frame.from_options(
 # Convert DynamicFrame to DataFrame
 df = dyf.toDF()
 
+# Print schema and column names for debugging
+print("Schema of DataFrame:")
+df.printSchema()
+print("Column names in DataFrame:", df.columns)
+
+# Trim and normalize column names (remove spaces, convert to lowercase)
+df = df.toDF(*[c.strip().lower() for c in df.columns])
+
 # Drop rows with null values in NOT NULL columns
-df = df.dropna(subset=["tennantid", "announcement Id", "announcementNumber"])
+df = df.dropna(subset=["tenantid", "announcementid", "announcementnumber"])
 
 # Column mapping (rename and cast types as per Redshift DDL)
 df = df.select(
-    F.col("tennantid").cast("int"),
-    F.col("announcement Id").cast("bigint").alias("announcement_id"),
-    F.col("announcementNumber").cast("string"),
-    F.col("announcement status").cast("string"),
-    F.col("announcementTemplate").cast("string"),
-    F.col("salaryType").cast("string"),
-    F.col("minimumSalary").cast("float"),
-    F.col("maximumSalary").cast("float"),
-    F.col("notToExceed").cast("string"),
-    F.col("totalOpenings").cast("string"),
-    F.col("openDate").cast("timestamp"),
-    F.col("closeDate").cast("timestamp"),
-    F.col("releasedFlag").cast("boolean"),
+    F.col("tenantid").cast("int"),
+    F.col("announcementid").cast("bigint"),
+    F.col("announcementnumber").cast("string"),
+    F.col("announcementstatus").cast("string"),
+    F.col("announcementtemplate").cast("string"),
+    F.col("salarytype").cast("string"),
+    F.col("minimumsalary").cast("float"),
+    F.col("maximumsalary").cast("float"),
+    F.col("nottoexceed").cast("string"),
+    F.col("totalopenings").cast("string"),
+    F.col("opendate").cast("timestamp"),
+    F.col("closedate").cast("timestamp"),
+    F.col("releasedflag").cast("boolean"),
     F.col("releaseddatetime").cast("timestamp"),
-    F.col("applicationLimitSetFlag").cast("boolean"),
-    F.col("applicationLimit").cast("int"),
-    F.col("displayDefaultBenefitsTextFlag").cast("boolean"),
-    F.col("externalContactId").cast("bigint"),
-    F.col("externalContactName").cast("string"),
-    F.col("externalContactEmail").cast("string"),
-    F.col("internalContactId").cast("bigint"),
-    F.col("internalContactName").cast("string"),
-    F.col("internalContactEmail").cast("string"),
-    F.col("usajobsControlNumber").cast("bigint"),
-    F.col("linkedUSAJOBSCONTROLNUMBER").cast("string"),
-    F.col("WhoMayApply").cast("string"),
-    F.col("whoMayApplyOverrideText").cast("string"),
+    F.col("applicationlimitsetflag").cast("boolean"),
+    F.col("applicationlimit").cast("int"),
+    F.col("displaydefaultbenefitstextflag").cast("boolean"),
+    F.col("externalcontactid").cast("bigint"),
+    F.col("externalcontactname").cast("string"),
+    F.col("externalcontactemail").cast("string"),
+    F.col("internalcontactid").cast("bigint"),
+    F.col("internalcontactname").cast("string"),
+    F.col("internalcontactemail").cast("string"),
+    F.col("usajobscontrolnumber").cast("bigint"),
+    F.col("linkedusajobscontrolnumber").cast("string"),
+    F.col("whomayapply").cast("string"),
+    F.col("whomayapplyoverridetext").cast("string"),
     F.col("promotionpotential").cast("string"),
     F.col("usajobstatus").cast("string"),
     F.col("lastmodifieddatetime").cast("timestamp"),
-    F.col("dwLastModifieddatetime").cast("timestamp"),
+    F.col("dwlastmodifieddatetime").cast("timestamp"),
 )
 
 # Convert DataFrame back to DynamicFrame

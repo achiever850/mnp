@@ -13,7 +13,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 
 # Define parameters
-args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'IAM_ROLE'])
 job.init(args['JOB_NAME'], args)
 
 # Redshift connection details
@@ -55,7 +55,10 @@ try:
             "database": redshift_database,
             "postactions": f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
         },
-        redshift_tmp_dir=redshift_temp_dir
+        redshift_tmp_dir=redshift_temp_dir,
+        additional_options={
+            "aws_iam_role": args['IAM_ROLE']
+        }
     )
     print("Data successfully written to Redshift")
 except Exception as e:

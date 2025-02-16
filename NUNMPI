@@ -5,8 +5,9 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.functions import when, lit, col
 
-## [@params: [JOB_NAME]](pplx://action/followup)
+## @params: [JOB_NAME]
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 sc = SparkContext()
@@ -25,7 +26,7 @@ redshift_table = "announcement"
 
 # Read CSV files from S3
 datasource0 = glueContext.create_dynamic_frame.from_options(
-    format_options={"multiline": False},
+    format_options={"multiline": False, "withHeader": True},
     connection_type="s3",
     format="csv",
     connection_options={"paths": [s3_path], "recurse": True},
@@ -36,55 +37,80 @@ datasource0 = glueContext.create_dynamic_frame.from_options(
 mapped_dyf = ApplyMapping.apply(
     frame=datasource0,
     mappings=[
-        ("col0", "int", "tennantid", "int"),
-        ("col1", "bigint", "announcementId", "bigint"),
-        ("col2", "string", "announcementNumber", "string"),
-        ("col3", "string", "announcementstatus", "string"),
-        ("col4", "string", "announcementTemplate", "string"),
-        ("col5", "string", "salaryType", "string"),
-        ("col6", "double", "minimumSalary", "double"),
-        ("col7", "double", "maximumSalary", "double"),
-        ("col8", "string", "notToExceed", "string"),
-        ("col9", "string", "totalOpenings", "string"),
-        ("col10", "timestamp", "openDate", "timestamp"),
-        ("col11", "timestamp", "closeDate", "timestamp"),
-        ("col12", "boolean", "releasedFlag", "boolean"),
-        ("col13", "timestamp", "releaseddatetime", "timestamp"),
-        ("col14", "boolean", "applicationLimitSetFlag", "boolean"),
-        ("col15", "int", "applicationLimit", "int"),
-        ("col16", "boolean", "displayDefaultBenefitsTextFlag", "boolean"),
-        ("col17", "bigint", "externalContactId", "bigint"),
-        ("col18", "string", "externalContactName", "string"),
-        ("col19", "string", "externalContactEmail", "string"),
-        ("col20", "bigint", "internalContactId", "bigint"),
-        ("col21", "string", "internalContactName", "string"),
-        ("col22", "string", "internalContactEmail", "string"),
-        ("col23", "bigint", "usajobsControlNumber", "bigint"),
-        ("col24", "string", "linkedUSAJOBSCONTROLNUMBER", "string"),
-        ("col25", "string", "WhoMayApply", "string"),
-        ("col26", "string", "whoMayApplyOverrideText", "string"),
-        ("col27", "string", "promotionpotential", "string"),
-        ("col28", "string", "usajobstatus", "string"),
-        ("col29", "timestamp", "lastmodifieddatetime", "timestamp"),
-        ("col30", "timestamp", "dwLastModifieddatetime", "timestamp")
+        ("tennantid", "int", "tennantid", "int"),
+        ("announcementId", "bigint", "announcementId", "bigint"),
+        ("announcementNumber", "string", "announcementNumber", "string"),
+        ("announcementstatus", "string", "announcementstatus", "string"),
+        ("announcementTemplate", "string", "announcementTemplate", "string"),
+        ("salaryType", "string", "salaryType", "string"),
+        ("minimumSalary", "double", "minimumSalary", "double"),
+        ("maximumSalary", "double", "maximumSalary", "double"),
+        ("notToExceed", "string", "notToExceed", "string"),
+        ("totalOpenings", "string", "totalOpenings", "string"),
+        ("openDate", "timestamp", "openDate", "timestamp"),
+        ("closeDate", "timestamp", "closeDate", "timestamp"),
+        ("releasedFlag", "boolean", "releasedFlag", "boolean"),
+        ("releaseddatetime", "timestamp", "releaseddatetime", "timestamp"),
+        ("applicationLimitSetFlag", "boolean", "applicationLimitSetFlag", "boolean"),
+        ("applicationLimit", "int", "applicationLimit", "int"),
+        ("displayDefaultBenefitsTextFlag", "boolean", "displayDefaultBenefitsTextFlag", "boolean"),
+        ("externalContactId", "bigint", "externalContactId", "bigint"),
+        ("externalContactName", "string", "externalContactName", "string"),
+        ("externalContactEmail", "string", "externalContactEmail", "string"),
+        ("internalContactId", "bigint", "internalContactId", "bigint"),
+        ("internalContactName", "string", "internalContactName", "string"),
+        ("internalContactEmail", "string", "internalContactEmail", "string"),
+        ("usajobsControlNumber", "bigint", "usajobsControlNumber", "bigint"),
+        ("linkedUSAJOBSCONTROLNUMBER", "string", "linkedUSAJOBSCONTROLNUMBER", "string"),
+        ("WhoMayApply", "string", "WhoMayApply", "string"),
+        ("whoMayApplyOverrideText", "string", "whoMayApplyOverrideText", "string"),
+        ("promotionpotential", "string", "promotionpotential", "string"),
+        ("usajobstatus", "string", "usajobstatus", "string"),
+        ("lastmodifieddatetime", "timestamp", "lastmodifieddatetime", "timestamp"),
+        ("dwLastModifieddatetime", "timestamp", "dwLastModifieddatetime", "timestamp")
     ]
 )
 
-# Convert DynamicFrame to DataFrame, drop duplicates, and convert back to DynamicFrame
+# Convert DynamicFrame to DataFrame for easier manipulation
 df = mapped_dyf.toDF()
+
+# Handle NULL values for NOT NULL columns
+df = df.withColumn("tennantid", when(col("tennantid").isNull(), lit(8)).otherwise(col("tennantid")))
+df = df.withColumn("announcementId", when(col("announcementId").isNull(), lit(-1)).otherwise(col("announcementId")))
+df = df.withColumn("announcementNumber", when(col("announcementNumber").isNull(), lit("Unknown")).otherwise(col("announcementNumber")))
+
+# Drop duplicates based on announcementId
 df_no_duplicates = df.dropDuplicates(["announcementId"])
+
+# Convert back to DynamicFrame
 final_dyf = DynamicFrame.fromDF(df_no_duplicates, glueContext, "final_dyf")
 
 # Write to Redshift
-glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=final_dyf,
-    catalog_connection=redshift_connection,
-    connection_options={
-        "dbtable": f"{redshift_schema}.{redshift_table}",
-        "database": redshift_database
-    },
-    redshift_tmp_dir=redshift_temp_dir,
-    transformation_ctx="datasink4"
-)
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=final_dyf,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "database": redshift_database,
+            "postactions": "VACUUM FULL; ANALYZE;"
+        },
+        redshift_tmp_dir=redshift_temp_dir,
+        transformation_ctx="datasink4"
+    )
+    print("Data successfully loaded into Redshift")
+except Exception as e:
+    print(f"Error loading data into Redshift: {str(e)}")
+    # Log the error records
+    error_records = final_dyf.filter(lambda x: x["tennantid"] is None or x["announcementId"] is None or x["announcementNumber"] is None)
+    error_records.show(10)
+    # Optionally, write error records to S3 for further analysis
+    error_path = "s3://your-error-bucket/error_records/"
+    glueContext.write_dynamic_frame.from_options(
+        frame=error_records,
+        connection_type="s3",
+        connection_options={"path": error_path},
+        format="csv"
+    )
 
 job.commit()

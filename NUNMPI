@@ -49,18 +49,27 @@ df_filtered.printSchema()
 print("Sample data from the filtered DataFrame:")
 df_filtered.show(5)
 
+# Ensure data quality and integrity
+null_count = df_filtered.filter(
+    (col("tenantId").isNull()) |
+    (col("officeId").isNull())
+).count()
+print(f"Number of records with null values in NOT NULL columns: {null_count}")
+
+if null_count > 0:
+    raise ValueError("Data quality check failed: Null values found in NOT NULL columns.")
+
 # Convert back to DynamicFrame
 dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, "dynamic_frame_filtered")
 
-# Write filtered data to Redshift with postactions to truncate table
+# Write filtered data to Redshift
 try:
     glueContext.write_dynamic_frame.from_jdbc_conf(
         frame=dynamic_frame_filtered,
         catalog_connection=redshift_connection,
         connection_options={
             "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "postactions": f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
+            "database": redshift_database
         },
         redshift_tmp_dir=redshift_temp_dir
     )

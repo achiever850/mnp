@@ -13,7 +13,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 
 # Define parameters
-args = getResolvedOptions(sys.argv, ['JOB_NAME', 'IAM_ROLE'])
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 job.init(args['JOB_NAME'], args)
 
 # Redshift connection details
@@ -22,6 +22,7 @@ redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 redshift_table = "announcement"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+iam_role = "arn:aws-us-gov:iam::094737541415:role/project/project-hcd-glu-role"
 
 # S3 path to the folder containing CSV files
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
@@ -57,7 +58,7 @@ try:
         },
         redshift_tmp_dir=redshift_temp_dir,
         additional_options={
-            "aws_iam_role": args['IAM_ROLE']
+            "aws_iam_role": iam_role
         }
     )
     print("Data successfully written to Redshift")

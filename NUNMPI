@@ -26,10 +26,6 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 # S3 path to the folder containing CSV files
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
 
-# Truncate the Redshift table using Spark SQL and the Glue connection
-truncate_sql = f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
-spark.sql(f"CALL awsdatacatalog.truncate('{redshift_connection}', '{truncate_sql}')")
-
 # Read CSV files from S3
 dynamic_frame = glueContext.create_dynamic_frame.from_options(
     connection_type="s3",
@@ -49,13 +45,14 @@ df_filtered = df.filter(
 # Convert back to DynamicFrame
 dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, "dynamic_frame_filtered")
 
-# Write filtered data to Redshift
+# Write filtered data to Redshift with postactions to truncate table
 glueContext.write_dynamic_frame.from_jdbc_conf(
     frame=dynamic_frame_filtered,
     catalog_connection=redshift_connection,
     connection_options={
         "dbtable": f"{redshift_schema}.{redshift_table}",
-        "database": redshift_database
+        "database": redshift_database,
+        "postactions": f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
     },
     redshift_tmp_dir=redshift_temp_dir
 )

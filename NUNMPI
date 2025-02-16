@@ -4,113 +4,87 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from pyspark.sql import functions as F
 from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import when, lit, col
 
-## @params: [JOB_NAME]
-args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-
+# Get the Glue context
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
-job.init(args['JOB_NAME'], args)
 
-# S3 and Redshift Configurations
+# S3 Path
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+
+# Redshift Configurations
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 redshift_table = "announcement"
 
-# Read CSV files from S3
-datasource0 = glueContext.create_dynamic_frame.from_options(
-    format_options={"multiline": False, "withHeader": True},
+# Read CSV data from S3
+dyf = glueContext.create_dynamic_frame.from_options(
+    format_options={"withHeader": True, "separator": ","},
     connection_type="s3",
     format="csv",
-    connection_options={"paths": [s3_path], "recurse": True},
-    transformation_ctx="datasource0"
+    connection_options={"paths": [s3_path]},
 )
 
-# Map the columns to match the Redshift table schema
-mapped_dyf = ApplyMapping.apply(
-    frame=datasource0,
-    mappings=[
-        ("tennantid", "int", "tennantid", "int"),
-        ("announcementId", "bigint", "announcementId", "bigint"),
-        ("announcementNumber", "string", "announcementNumber", "string"),
-        ("announcementstatus", "string", "announcementstatus", "string"),
-        ("announcementTemplate", "string", "announcementTemplate", "string"),
-        ("salaryType", "string", "salaryType", "string"),
-        ("minimumSalary", "double", "minimumSalary", "double"),
-        ("maximumSalary", "double", "maximumSalary", "double"),
-        ("notToExceed", "string", "notToExceed", "string"),
-        ("totalOpenings", "string", "totalOpenings", "string"),
-        ("openDate", "timestamp", "openDate", "timestamp"),
-        ("closeDate", "timestamp", "closeDate", "timestamp"),
-        ("releasedFlag", "boolean", "releasedFlag", "boolean"),
-        ("releaseddatetime", "timestamp", "releaseddatetime", "timestamp"),
-        ("applicationLimitSetFlag", "boolean", "applicationLimitSetFlag", "boolean"),
-        ("applicationLimit", "int", "applicationLimit", "int"),
-        ("displayDefaultBenefitsTextFlag", "boolean", "displayDefaultBenefitsTextFlag", "boolean"),
-        ("externalContactId", "bigint", "externalContactId", "bigint"),
-        ("externalContactName", "string", "externalContactName", "string"),
-        ("externalContactEmail", "string", "externalContactEmail", "string"),
-        ("internalContactId", "bigint", "internalContactId", "bigint"),
-        ("internalContactName", "string", "internalContactName", "string"),
-        ("internalContactEmail", "string", "internalContactEmail", "string"),
-        ("usajobsControlNumber", "bigint", "usajobsControlNumber", "bigint"),
-        ("linkedUSAJOBSCONTROLNUMBER", "string", "linkedUSAJOBSCONTROLNUMBER", "string"),
-        ("WhoMayApply", "string", "WhoMayApply", "string"),
-        ("whoMayApplyOverrideText", "string", "whoMayApplyOverrideText", "string"),
-        ("promotionpotential", "string", "promotionpotential", "string"),
-        ("usajobstatus", "string", "usajobstatus", "string"),
-        ("lastmodifieddatetime", "timestamp", "lastmodifieddatetime", "timestamp"),
-        ("dwLastModifieddatetime", "timestamp", "dwLastModifieddatetime", "timestamp")
-    ]
+# Convert DynamicFrame to DataFrame
+df = dyf.toDF()
+
+# Drop rows with null values in NOT NULL columns
+df = df.dropna(subset=["tennantid", "announcement Id", "announcementNumber"])
+
+# Column mapping (rename and cast types as per Redshift DDL)
+df = df.select(
+    F.col("tennantid").cast("int"),
+    F.col("announcement Id").cast("bigint").alias("announcement_id"),
+    F.col("announcementNumber").cast("string"),
+    F.col("announcement status").cast("string"),
+    F.col("announcementTemplate").cast("string"),
+    F.col("salaryType").cast("string"),
+    F.col("minimumSalary").cast("float"),
+    F.col("maximumSalary").cast("float"),
+    F.col("notToExceed").cast("string"),
+    F.col("totalOpenings").cast("string"),
+    F.col("openDate").cast("timestamp"),
+    F.col("closeDate").cast("timestamp"),
+    F.col("releasedFlag").cast("boolean"),
+    F.col("releaseddatetime").cast("timestamp"),
+    F.col("applicationLimitSetFlag").cast("boolean"),
+    F.col("applicationLimit").cast("int"),
+    F.col("displayDefaultBenefitsTextFlag").cast("boolean"),
+    F.col("externalContactId").cast("bigint"),
+    F.col("externalContactName").cast("string"),
+    F.col("externalContactEmail").cast("string"),
+    F.col("internalContactId").cast("bigint"),
+    F.col("internalContactName").cast("string"),
+    F.col("internalContactEmail").cast("string"),
+    F.col("usajobsControlNumber").cast("bigint"),
+    F.col("linkedUSAJOBSCONTROLNUMBER").cast("string"),
+    F.col("WhoMayApply").cast("string"),
+    F.col("whoMayApplyOverrideText").cast("string"),
+    F.col("promotionpotential").cast("string"),
+    F.col("usajobstatus").cast("string"),
+    F.col("lastmodifieddatetime").cast("timestamp"),
+    F.col("dwLastModifieddatetime").cast("timestamp"),
 )
 
-# Convert DynamicFrame to DataFrame for easier manipulation
-df = mapped_dyf.toDF()
-
-# Handle NULL values for NOT NULL columns
-df = df.withColumn("tennantid", when(col("tennantid").isNull(), lit(8)).otherwise(col("tennantid")))
-df = df.withColumn("announcementId", when(col("announcementId").isNull(), lit(-1)).otherwise(col("announcementId")))
-df = df.withColumn("announcementNumber", when(col("announcementNumber").isNull(), lit("Unknown")).otherwise(col("announcementNumber")))
-
-# Drop duplicates based on announcementId
-df_no_duplicates = df.dropDuplicates(["announcementId"])
-
-# Convert back to DynamicFrame
-final_dyf = DynamicFrame.fromDF(df_no_duplicates, glueContext, "final_dyf")
+# Convert DataFrame back to DynamicFrame
+dyf_clean = DynamicFrame.fromDF(df, glueContext, "dyf_clean")
 
 # Write to Redshift
-try:
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=final_dyf,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "postactions": "VACUUM FULL; ANALYZE;"
-        },
-        redshift_tmp_dir=redshift_temp_dir,
-        transformation_ctx="datasink4"
-    )
-    print("Data successfully loaded into Redshift")
-except Exception as e:
-    print(f"Error loading data into Redshift: {str(e)}")
-    # Log the error records
-    error_records = final_dyf.filter(lambda x: x["tennantid"] is None or x["announcementId"] is None or x["announcementNumber"] is None)
-    error_records.show(10)
-    # Optionally, write error records to S3 for further analysis
-    error_path = "s3://your-error-bucket/error_records/"
-    glueContext.write_dynamic_frame.from_options(
-        frame=error_records,
-        connection_type="s3",
-        connection_options={"path": error_path},
-        format="csv"
-    )
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=dyf_clean,
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": f"{redshift_schema}.{redshift_table}",
+        "database": redshift_database,
+    },
+    redshift_tmp_dir=redshift_temp_dir,
+)
 
+# Commit Job
 job.commit()

@@ -43,6 +43,13 @@ df_filtered = df.filter(
     (col("announcementNumber").isNotNull())
 )
 
+# Add logging to inspect the filtered data
+print("Schema of the filtered DataFrame:")
+df_filtered.printSchema()
+
+print("Sample data from the filtered DataFrame:")
+df_filtered.show(5)
+
 # Convert back to DynamicFrame
 dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, "dynamic_frame_filtered")
 

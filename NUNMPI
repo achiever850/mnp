@@ -5,117 +5,60 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import lit, coalesce
+from pyspark.sql.functions import col
 
-# Initialize Glue context and job
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc = SparkContext()
-glueContext = GlueContext(sc)
+# Initialize Glue Context
+glueContext = GlueContext(SparkContext.getOrCreate())
 spark = glueContext.spark_session
 job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
 
-# S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+# Define parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+job.init(args['JOB_NAME'], args)
+
+# Redshift connection details
 redshift_connection = "hcd_dev_redshift_connection"
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
+redshift_table = "announcement"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 
-# Folder to Redshift Table Mapping
-table_mappings = {
-    "certificateapplications": "certificateapplication",
-    "certificates": "certificate",
-    "customers": "customer",
-    "newhires": "new_hire",
-    "offices": "office",
-    "organizations": "organization",
-    "requests": "request",
-    "tth": "tth"
-}
+# S3 path to the folder containing CSV files
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
 
-def get_table_schema(glueContext, connection, database, schema, table):
-    jdbc_url = glueContext.extract_jdbc_conf(connection)["url"]
-    query = f"""
-    SELECT column_name, data_type, is_nullable
-    FROM information_schema.columns
-    WHERE table_schema = '{schema}' AND table_name = '{table}'
-    ORDER BY ordinal_position
-    """
-    df = spark.read.format("jdbc") \
-        .option("url", jdbc_url) \
-        .option("dbtable", f"({query}) as tmp") \
-        .option("user", glueContext.extract_jdbc_conf(connection)["user"]) \
-        .option("password", glueContext.extract_jdbc_conf(connection)["password"]) \
-        .load()
-    return df.collect()
+# Truncate the Redshift table using Spark SQL and the Glue connection
+truncate_sql = f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
+spark.sql(f"CALL awsdatacatalog.truncate('{redshift_connection}', '{truncate_sql}')")
 
-def process_folder(folder, redshift_table):
-    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-    
-    folder_path = f"{s3_path}{folder}/"
-    print(f"Full S3 Folder Path: {folder_path}")
+# Read CSV files from S3
+dynamic_frame = glueContext.create_dynamic_frame.from_options(
+    connection_type="s3",
+    connection_options={"paths": [s3_path]},
+    format="csv",
+    format_options={"withHeader": True}
+)
 
-    # Read CSV from S3
-    dynamic_frame = glueContext.create_dynamic_frame.from_options(
-        connection_type="s3",
-        connection_options={"paths": [folder_path]},
-        format="csv",
-        format_options={"withHeader": True, "separator": ","}
-    )
+# Convert to DataFrame to filter out records with null values in NOT NULL columns
+df = dynamic_frame.toDF()
+df_filtered = df.filter(
+    (col("tennantid").isNotNull()) &
+    (col("announcementId").isNotNull()) &
+    (col("announcementNumber").isNotNull())
+)
 
-    # Convert to DataFrame
-    df = dynamic_frame.toDF()
-    print(f"Schema for {folder}:")
-    df.printSchema()
-    print(f"Sample Data from {folder}:")
-    df.show(5, truncate=False)
+# Convert back to DynamicFrame
+dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, "dynamic_frame_filtered")
 
-    # Get Redshift table schema
-    table_schema = get_table_schema(glueContext, redshift_connection, redshift_database, redshift_schema, redshift_table)
+# Write filtered data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=dynamic_frame_filtered,
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": f"{redshift_schema}.{redshift_table}",
+        "database": redshift_database
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
 
-    # Ensure all required columns are present and handle NULL values
-    for column in table_schema:
-        col_name = column.column_name
-        if col_name not in df.columns:
-            if column.is_nullable == 'NO':
-                # Add a default value for not-null columns
-                df = df.withColumn(col_name, lit(''))  # You might want to adjust the default value
-            else:
-                # Add as NULL for nullable columns
-                df = df.withColumn(col_name, lit(None))
-        else:
-            # Handle potential NULL values for not-null columns
-            if column.is_nullable == 'NO':
-                df = df.withColumn(col_name, coalesce(df[col_name], lit('')))  # Replace NULL with empty string
-
-    # Convert back to DynamicFrame
-    dynamic_frame_processed = DynamicFrame.fromDF(df, glueContext, "processed")
-
-    # Truncate the Redshift table before loading new data
-    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-    print(f"Executing: {truncate_query}")
-
-    # Write data to Redshift with truncate option
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame_processed,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": truncate_query
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
-
-    print(f"Completed processing for {folder}")
-
-# Process Each Folder
-for folder, redshift_table in table_mappings.items():
-    try:
-        process_folder(folder, redshift_table)
-    except Exception as e:
-        print(f"Error processing {folder}: {str(e)}")
-
-# Commit Job
+# Commit job
 job.commit()

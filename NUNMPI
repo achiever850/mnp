@@ -1,128 +1,90 @@
 import sys
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
 
-# Initialize Glue context and job
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+## [@params: [JOB_NAME]](pplx://action/followup)
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job.init(args['JOB_NAME'], args)
 
-# S3 path
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv"
+# S3 and Redshift Configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
+redshift_table = "announcement"
 
-# List of folders to process
-folders = [
-    "announcements",
-    # Add other folders here
-]
+# Read CSV files from S3
+datasource0 = glueContext.create_dynamic_frame.from_options(
+    format_options={"multiline": False},
+    connection_type="s3",
+    format="csv",
+    connection_options={"paths": [s3_path], "recurse": True},
+    transformation_ctx="datasource0"
+)
 
-# Dictionary mapping folders to their NOT NULL columns
-not_null_columns = {
-    "announcements": ["tennantid", "announcement Id", "announcementNumber"],
-    # Add other folders and NOT NULL columns here
-}
+# Map the columns to match the Redshift table schema
+mapped_dyf = ApplyMapping.apply(
+    frame=datasource0,
+    mappings=[
+        ("col0", "int", "tennantid", "int"),
+        ("col1", "bigint", "announcementId", "bigint"),
+        ("col2", "string", "announcementNumber", "string"),
+        ("col3", "string", "announcementstatus", "string"),
+        ("col4", "string", "announcementTemplate", "string"),
+        ("col5", "string", "salaryType", "string"),
+        ("col6", "double", "minimumSalary", "double"),
+        ("col7", "double", "maximumSalary", "double"),
+        ("col8", "string", "notToExceed", "string"),
+        ("col9", "string", "totalOpenings", "string"),
+        ("col10", "timestamp", "openDate", "timestamp"),
+        ("col11", "timestamp", "closeDate", "timestamp"),
+        ("col12", "boolean", "releasedFlag", "boolean"),
+        ("col13", "timestamp", "releaseddatetime", "timestamp"),
+        ("col14", "boolean", "applicationLimitSetFlag", "boolean"),
+        ("col15", "int", "applicationLimit", "int"),
+        ("col16", "boolean", "displayDefaultBenefitsTextFlag", "boolean"),
+        ("col17", "bigint", "externalContactId", "bigint"),
+        ("col18", "string", "externalContactName", "string"),
+        ("col19", "string", "externalContactEmail", "string"),
+        ("col20", "bigint", "internalContactId", "bigint"),
+        ("col21", "string", "internalContactName", "string"),
+        ("col22", "string", "internalContactEmail", "string"),
+        ("col23", "bigint", "usajobsControlNumber", "bigint"),
+        ("col24", "string", "linkedUSAJOBSCONTROLNUMBER", "string"),
+        ("col25", "string", "WhoMayApply", "string"),
+        ("col26", "string", "whoMayApplyOverrideText", "string"),
+        ("col27", "string", "promotionpotential", "string"),
+        ("col28", "string", "usajobstatus", "string"),
+        ("col29", "timestamp", "lastmodifieddatetime", "timestamp"),
+        ("col30", "timestamp", "dwLastModifieddatetime", "timestamp")
+    ]
+)
 
-# Dictionary mapping data types to their corresponding PySpark types
-data_type_mapping = {
-    "tennantid": IntegerType(),
-    "announcement Id": LongType(),
-    "announcementNumber": StringType(),
-    "announcement status": StringType(),
-    "announcementTemplate": StringType(),
-    "salaryType": StringType(),
-    "minimumSalary": FloatType(),
-    "maximumSalary": FloatType(),
-    "notToExceed": StringType(),
-    "totalOpenings": StringType(),
-    "openDate": TimestampType(),
-    "closeDate": TimestampType(),
-    "releasedFlag": BooleanType(),
-    "releaseddatetime": TimestampType(),
-    "applicationLimitSetFlag": BooleanType(),
-    "applicationLimit": IntegerType(),
-    "displayDefaultBenefitsTextFlag": BooleanType(),
-    "externalContactId": LongType(),
-    "externalContactName": StringType(),
-    "externalContactEmail": StringType(),
-    "internalContactId": LongType(),
-    "internalContactName": StringType(),
-    "internalContactEmail": StringType(),
-    "usajobsControlNumber": LongType(),
-    "linkedUSAJOBSCONTROLNUMBER": StringType(),
-    "WhoMayApply": StringType(),
-    "whoMayApplyOverrideText": StringType(),
-    "promotionpotential": StringType(),
-    "usajobstatus": StringType(),
-    "lastmodifieddatetime": TimestampType(),
-    "dwLastModifieddatetime": TimestampType()
-}
+# Convert DynamicFrame to DataFrame, drop duplicates, and convert back to DynamicFrame
+df = mapped_dyf.toDF()
+df_no_duplicates = df.dropDuplicates(["announcementId"])
+final_dyf = DynamicFrame.fromDF(df_no_duplicates, glueContext, "final_dyf")
 
-# Process Each Folder
-for folder in folders:
-    try:
-        print(f"Processing Folder: {folder}")
-        
-        # Construct the full S3 path to the folder
-        folder_path = f"{s3_path}/{folder}/"
-        print(f"Full S3 Folder Path: {folder_path}")
+# Write to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=final_dyf,
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": f"{redshift_schema}.{redshift_table}",
+        "database": redshift_database
+    },
+    redshift_tmp_dir=redshift_temp_dir,
+    transformation_ctx="datasink4"
+)
 
-        # Read CSV from S3
-        dynamic_frame = glueContext.create_dynamic_frame.from_options(
-            connection_type="s3",
-            connection_options={"paths": [folder_path]},
-            format="csv",
-            format_options={"withHeader": True, "separator": ","}
-        )
-
-        # Convert to DataFrame
-        df = dynamic_frame.toDF()
-
-        # Apply data type conversions
-        for column, dtype in data_type_mapping.items():
-            df = df.withColumn(column, col(column).cast(dtype))
-
-        # Drop rows with null values in NOT NULL columns
-        if folder in not_null_columns:
-            existing_columns = [col for col in df.columns if col in not_null_columns[folder]]
-            if existing_columns:
-                df = df.dropna(subset=existing_columns)
-                print(f"Dropped rows with null values in {existing_columns}")
-            else:
-                print(f"No matching NOT NULL columns found for {folder}. Skipping null check.")
-
-        # Convert back to DynamicFrame
-        dynamic_frame = DynamicFrame.fromDF(df, glueContext, "cleaned_frame")
-
-        # Redshift connection details
-        redshift_connection = "your_redshift_connection"
-        redshift_temp_dir = "s3://your-temp-bucket/temporary/"
-        redshift_database = "your_database"
-        redshift_schema = "your_schema"
-        redshift_table = folder.capitalize()  # Convert folder name to table name
-
-        # Truncate the Redshift table before loading new data
-        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-
-        # Write data to Redshift
-        glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame,
-            catalog_connection=redshift_connection,
-            connection_options={
-                "dbtable": f"{redshift_schema}.{redshift_table}",
-                "database": redshift_database,
-                "preactions": truncate_query
-            },
-            redshift_tmp_dir=redshift_temp_dir
-        )
-        
-    except Exception as e:
-        print(f"Error processing folder {folder}: {e}")
-        raise
-
-# Commit Job
 job.commit()

@@ -38,7 +38,7 @@ dynamic_frame = glueContext.create_dynamic_frame.from_options(
 # Convert to DataFrame to filter out records with null values in NOT NULL columns
 df = dynamic_frame.toDF()
 df_filtered = df.filter(
-    (col("tennantid").isNotNull()) &
+    (col("tenantid").isNotNull()) &
     (col("announcementId").isNotNull()) &
     (col("announcementNumber").isNotNull())
 )
@@ -56,10 +56,7 @@ try:
             "database": redshift_database,
             "postactions": f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
         },
-        redshift_tmp_dir=redshift_temp_dir,
-        additional_options={
-            "aws_iam_role": iam_role
-        }
+        redshift_tmp_dir=redshift_temp_dir
     )
     print("Data successfully written to Redshift")
 except Exception as e:

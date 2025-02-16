@@ -46,16 +46,21 @@ df_filtered = df.filter(
 dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, "dynamic_frame_filtered")
 
 # Write filtered data to Redshift with postactions to truncate table
-glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=dynamic_frame_filtered,
-    catalog_connection=redshift_connection,
-    connection_options={
-        "dbtable": f"{redshift_schema}.{redshift_table}",
-        "database": redshift_database,
-        "postactions": f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
-    },
-    redshift_tmp_dir=redshift_temp_dir
-)
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=dynamic_frame_filtered,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "database": redshift_database,
+            "postactions": f"TRUNCATE TABLE {redshift_schema}.{redshift_table}"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print("Data successfully written to Redshift")
+except Exception as e:
+    print("Error writing data to Redshift:", str(e))
+    raise e
 
 # Commit job
 job.commit()

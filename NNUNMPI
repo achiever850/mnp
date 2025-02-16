@@ -62,6 +62,10 @@ if null_count > 0:
 # Convert back to DynamicFrame
 dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, "dynamic_frame_filtered")
 
+# Validate that the DynamicFrame is not empty
+if dynamic_frame_filtered.count() == 0:
+    raise ValueError("The DynamicFrame is empty after filtering. No data to load into Redshift.")
+
 # Write filtered data to Redshift
 try:
     glueContext.write_dynamic_frame.from_jdbc_conf(

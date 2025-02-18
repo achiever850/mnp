@@ -8,7 +8,33 @@ from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql.functions import col, to_timestamp
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, FloatType, BooleanType, TimestampType
 
-# ... (keep the initialization code unchanged)
+# Initialize Glue context and job
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# S3 and Redshift Configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
+
+# List of New Folders (and corresponding Redshift tables) to process
+folders = [
+    ("announcements", "announcement"),
+    ("certificateapplications", "certificateapplication"),
+    ("certificates", "certificate"),
+    ("customers", "customer"),
+    ("newhires", "new_hire"),
+    ("offices", "office"),
+    ("organizations", "organization"),
+    ("tth", "tth"),
+    ("requests", "request")
+]
 
 # Define the schema for the announcements table
 announcements_schema = StructType([

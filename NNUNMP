@@ -5,106 +5,73 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import col
 
-# Initialize Glue Context
-glueContext = GlueContext(SparkContext.getOrCreate())
+# Initialize Glue context and job
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+sc = SparkContext()
+glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
 
-# Define parameters
-args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-job.init(args['JOB_NAME'], args)
-
-# Redshift connection details
-redshift_connection = "hcd_dev_redshift_connection"
+# S3 and Redshift Configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
-iam_role = "arn:aws-us-gov:iam::094737541415:role/project/project-hcd-glu-role"
 
-# S3 base path
-s3_base_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+# List of New Folders (and corresponding Redshift tables) to process
+folders = [
+    ("announcements", "announcement"),
+    ("certificateapplications", "certificateapplication"),
+    ("certificates", "certificate"),
+    ("customers", "customer"),
+    ("newhires", "new_hire"),
+    ("offices", "office"),
+    ("organizations", "organization"),
+    ("tth", "tth"),
+    ("requests", "request")
+]
 
-# Define folder to table mapping
-folder_table_mapping = {
-    "announcements": "announcement",
-    "certificateapplications": "certificateapplication",
-    "certificates": "certificate",
-    "customers": "customer",
-    "newhires": "newhire",
-    "organizations": "organization",
-    "tth": "timetohire",
-    "requests": "request",
-    "offices": "office"
-}
-
-def process_folder(folder, table):
-    print(f"Processing folder: {folder} for table: {table}")
+# Process Each Folder
+for folder, redshift_table in folders:
+    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
     
-    s3_path = f"{s3_base_path}{folder}/"
-    
-    # Read CSV files from S3
+    # Construct the full S3 path to the folder
+    folder_path = f"{s3_path}{folder}/"
+    print(f"Full S3 Folder Path: {folder_path}")
+
+    # Read CSV from S3
     dynamic_frame = glueContext.create_dynamic_frame.from_options(
         connection_type="s3",
-        connection_options={"paths": [s3_path]},
+        connection_options={"paths": [folder_path]},
         format="csv",
-        format_options={"withHeader": True}
+        format_options={"withHeader": True, "separator": ","}
     )
-    
-    # Convert to DataFrame to filter out records with null values in NOT NULL columns
+
+    # Convert to DataFrame for inspection (optional)
     df = dynamic_frame.toDF()
-    
-    # Assuming tenantId and a primary key column (e.g., {table}Id) should not be null
-    df_filtered = df.filter(
-        (col("tenantId").isNotNull()) &
-        (col(f"{table}Id").isNotNull())
+    print(f"Schema for {folder}:")
+    df.printSchema()
+    print(f"Sample Data from {folder}:")
+    df.show(5)
+
+    # Truncate the Redshift table before loading new data
+    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+    print(f"Executing: {truncate_query}")
+
+    # Write data to Redshift with truncate option
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=dynamic_frame,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "database": redshift_database,
+            "preactions": truncate_query
+        },
+        redshift_tmp_dir=redshift_temp_dir
     )
-    
-    # Add logging to inspect the filtered data
-    print(f"Schema of the filtered DataFrame for {table}:")
-    df_filtered.printSchema()
-    
-    print(f"Sample data from the filtered DataFrame for {table}:")
-    df_filtered.show(5)
-    
-    # Ensure data quality and integrity
-    null_count = df_filtered.filter(
-        (col("tenantId").isNull()) |
-        (col(f"{table}Id").isNull())
-    ).count()
-    print(f"Number of records with null values in NOT NULL columns for {table}: {null_count}")
-    
-    if null_count > 0:
-        raise ValueError(f"Data quality check failed for {table}: Null values found in NOT NULL columns.")
-    
-    # Convert back to DynamicFrame
-    dynamic_frame_filtered = DynamicFrame.fromDF(df_filtered, glueContext, f"dynamic_frame_filtered_{table}")
-    
-    # Validate that the DynamicFrame is not empty
-    if dynamic_frame_filtered.count() == 0:
-        raise ValueError(f"The DynamicFrame for {table} is empty after filtering. No data to load into Redshift.")
-    
-    # Write filtered data to Redshift
-    try:
-        glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame_filtered,
-            catalog_connection=redshift_connection,
-            connection_options={
-                "dbtable": f"{redshift_schema}.{table}",
-                "database": redshift_database,
-                "postactions": "VACUUM FULL; ANALYZE;"
-            },
-            redshift_tmp_dir=redshift_temp_dir
-        )
-        print(f"Data successfully written to Redshift table {table}")
-    except Exception as e:
-        print(f"Error writing data to Redshift table {table}:", str(e))
-        raise e
 
-# Process each folder and load data into corresponding Redshift table
-for folder, table in folder_table_mapping.items():
-    process_folder(folder, table)
-
-# Commit job
+# Commit Job
 job.commit()

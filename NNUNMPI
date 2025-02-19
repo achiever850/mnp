@@ -1,134 +1,89 @@
 import sys
-import logging
-from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql.functions import col, to_timestamp
-from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, FloatType, BooleanType, TimestampType
 
-# Initialize logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+## @params: [JOB_NAME]
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
-def load_config():
-    return {
-        "S3_PATH": "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/",
-        "REDSHIFT_TEMP_DIR": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
-        "REDSHIFT_DATABASE": "hcd-dev-db",
-    }
-
-# Initialize Glue context and job
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job.init(args['JOB_NAME'], args)
 
-config = load_config()
-config['REDSHIFT_SCHEMA'] = "usastaffing_staging"
+# Read data from S3
+datasource0 = glueContext.create_dynamic_frame.from_options(
+    format_options={'withHeader': True, 'separator': ','},
+    connection_type="s3",
+    format="csv",
+    connection_options={
+        "paths": ["s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements"],
+        "recurse": True
+    },
+    transformation_ctx="datasource0"
+)
 
-# Define schema for announcements table matching Redshift DDL
-announcements_schema = StructType([
-    StructField("tenantid", IntegerType(), False),
-    StructField("announcementId", LongType(), False),
-    StructField("announcementNumber", StringType(), False),
-    StructField("announcementStatus", StringType(), True),
-    StructField("announcementTemplate", StringType(), True),
-    StructField("salaryType", StringType(), True),
-    StructField("minimumSalary", FloatType(), True),
-    StructField("maximumSalary", FloatType(), True),
-    StructField("notToExceed", StringType(), True),
-    StructField("totalOpenings", StringType(), True),
-    StructField("openDate", TimestampType(), True),
-    StructField("closeDate", TimestampType(), True),
-    StructField("releasedFlag", BooleanType(), True),
-    StructField("releaseddatetime", TimestampType(), True),
-    StructField("applicationLimitSetFlag", BooleanType(), True),
-    StructField("applicationLimit", IntegerType(), True),
-    StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
-    StructField("externalContactId", LongType(), True),
-    StructField("externalContactName", StringType(), True),
-    StructField("externalContactEmail", StringType(), True),
-    StructField("internalContactId", LongType(), True),
-    StructField("internalContactName", StringType(), True),
-    StructField("internalContactEmail", StringType(), True),
-    StructField("usajobsControlNumber", LongType(), True),
-    StructField("linkedUSAJOBSCONTROLNUMBER", StringType(), True),
-    StructField("WhoMayApply", StringType(), True),
-    StructField("whoMayApplyOverrideText", StringType(), True),
-    StructField("promotionpotential", StringType(), True),
-    StructField("usajobstatus", StringType(), True),
-    StructField("lastmodifieddatetime", TimestampType(), True),
-    StructField("dwLastModifieddatetime", TimestampType(), True)
-])
+# Convert DynamicFrame to DataFrame for easier manipulation
+df = datasource0.toDF()
 
-folders = [
-    ("announcements", "announcement"),
-]
+# Perform necessary transformations to match Redshift table structure
+df = df.withColumnRenamed("announcement Id", "announcementId") \
+       .withColumnRenamed("announcement status", "announcementStatus") \
+       .withColumnRenamed("announcementTemplate", "announcementTemplate") \
+       .withColumnRenamed("salaryType", "salaryType") \
+       .withColumnRenamed("minimumSalary", "minimumSalary") \
+       .withColumnRenamed("maximumSalary", "maximumSalary") \
+       .withColumnRenamed("notToExceed", "notToExceed") \
+       .withColumnRenamed("totalOpenings", "totalOpenings") \
+       .withColumnRenamed("openDate", "openDate") \
+       .withColumnRenamed("closeDate", "closeDate") \
+       .withColumnRenamed("releasedFlag", "releasedFlag") \
+       .withColumnRenamed("releaseddatetime", "releasedDateTime") \
+       .withColumnRenamed("applicationLimitSetFlag", "applicationLimitSetFlag") \
+       .withColumnRenamed("applicationLimit", "applicationLimit") \
+       .withColumnRenamed("displayDefaultBenefitsTextFlag", "displayDefaultBenefitsTextFlag") \
+       .withColumnRenamed("externalContactId", "externalContactId") \
+       .withColumnRenamed("externalContactName", "externalContactName") \
+       .withColumnRenamed("externalContactEmail", "externalContactEmail") \
+       .withColumnRenamed("internalContactId", "internalContactId") \
+       .withColumnRenamed("internalContactName", "internalContactName") \
+       .withColumnRenamed("internalContactEmail", "internalContactEmail") \
+       .withColumnRenamed("usajobsControlNumber", "usajobsControlNumber") \
+       .withColumnRenamed("linkedUSAJOBSCONTROLNUMBER", "linkedUsaJobsControlNumber") \
+       .withColumnRenamed("WhoMayApply", "whoMayApply") \
+       .withColumnRenamed("whoMayApplyOverrideText", "whoMayApplyOverrideText") \
+       .withColumnRenamed("promotionpotential", "promotionPotential") \
+       .withColumnRenamed("usajobstatus", "usajobStatus") \
+       .withColumnRenamed("lastmodifieddatetime", "lastModifiedDateTime") \
+       .withColumnRenamed("dwLastModifieddatetime", "dwLastModifiedDateTime")
 
-def process_folder(folder, redshift_table, schema):
-    try:
-        folder_path = f"{config['S3_PATH']}{folder}/"
-        logger.info(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-        logger.info(f"Full S3 Folder Path: {folder_path}")
+# Convert string columns to appropriate types with updated format for lastModifiedDateTime
+df = df.withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd HH:mm:ss"))
+df = df.withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd HH:mm:ss"))
+df = df.withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd HH:mm:ss"))
+df = df.withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SS"))
+df = df.withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SS"))
 
-        # Read CSV from S3
-        df = spark.read.csv(folder_path, header=True, inferSchema=False)  # Disable inferSchema for explicit control
+# Convert boolean strings to actual boolean values
+df = df.withColumn("releasedFlag", col("releasedFlag") == "true")
+df = df.withColumn("applicationLimitSetFlag", col("applicationLimitSetFlag") == "true")
+df = df.withColumn("displayDefaultBenefitsTextFlag", col("displayDefaultBenefitsTextFlag") == "true")
 
-        logger.debug("First few rows of the DataFrame:")
-        df.show(5)
-        logger.debug("Initial schema after reading:")
-        df.printSchema()
+# Convert string to int for NOT NULL columns
+df = df.withColumn("tennantid", col("tennantid").cast("int"))
+df = df.withColumn("announcementId", col("announcementId").cast("bigint"))
 
-        # Handle missing data for mandatory fields
-        mandatory_fields = ["tenantid", "announcementId", "announcementNumber"]
-        for field in mandatory_fields:
-            df = df.na.fill({field: "0" if field in ["tenantid", "announcementId"] else ""})
+# Write to Redshift
+df.write \
+  .format("jdbc") \
+  .option("url", "jdbc:redshift://<your-cluster-endpoint>:5439/hcd-dev-db?user=<username>&password=<password>") \
+  .option("dbtable", "usastaffing_staging.announcement") \
+  .option("tempdir", "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/") \
+  .mode("append") \
+  .save()
 
-        # Apply schema
-        for field in schema.fields:
-            if isinstance(field.dataType, TimestampType):
-                df = df.withColumn(field.name, to_timestamp(col(field.name), "yyyy-MM-dd HH:mm:ss"))
-            else:
-                df = df.withColumn(field.name, col(field.name).cast(field.dataType))
-            logger.debug(f"Applied schema for field {field.name}: {field.dataType}")
-
-        logger.info(f"Final schema for {folder}:")
-        df.printSchema()
-        logger.info(f"Sample Data from {folder} after schema application:")
-        df.show(5)
-
-        # Convert DataFrame to DynamicFrame
-        dynamic_frame = DynamicFrame.fromDF(df, glueContext, "dynamic_frame")
-        logger.debug(f"DynamicFrame conversion for {folder} complete")
-
-        # Truncate the Redshift table before loading new data
-        truncate_query = f"TRUNCATE TABLE {config['REDSHIFT_SCHEMA']}.{redshift_table};"
-        logger.info(f"Executing: {truncate_query}")
-
-        glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame,
-            catalog_connection="Redshift connection_hcd-dev-db",
-            connection_options={
-                "dbtable": f"{config['REDSHIFT_SCHEMA']}.{redshift_table}",
-                "database": config["REDSHIFT_DATABASE"],
-                "preactions": truncate_query
-            },
-            redshift_tmp_dir=config['REDSHIFT_TEMP_DIR']
-        )
-        logger.info(f"Successfully wrote data from {folder} to Redshift table {redshift_table}")
-
-    except Exception as e:
-        logger.error(f"Error processing {folder}: {str(e)}")
-        raise
-
-# Process Each Folder
-for folder, redshift_table in folders:
-    process_folder(folder, redshift_table, announcements_schema)
-
-# Commit Job
 job.commit()

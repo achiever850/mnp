@@ -10,12 +10,10 @@ from pyspark.sql.functions import col, to_timestamp
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, FloatType, BooleanType, TimestampType
 
 # Initialize logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Function to load configuration from environment variables or AWS Systems Manager Parameter Store
 def load_config():
-    # Here, you would typically fetch these from AWS Parameter Store or Secrets Manager
     return {
         "S3_PATH": "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/",
         "REDSHIFT_TEMP_DIR": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
@@ -35,9 +33,9 @@ config['REDSHIFT_SCHEMA'] = "usastaffing_staging"
 
 # Define schema for announcements table matching Redshift DDL
 announcements_schema = StructType([
-    StructField("tenantid", IntegerType(), False),  # NOT NULL in Redshift
-    StructField("announcementId", LongType(), False),  # NOT NULL in Redshift
-    StructField("announcementNumber", StringType(), False),  # NOT NULL in Redshift
+    StructField("tenantid", IntegerType(), False),
+    StructField("announcementId", LongType(), False),
+    StructField("announcementNumber", StringType(), False),
     StructField("announcementStatus", StringType(), True),
     StructField("announcementTemplate", StringType(), True),
     StructField("salaryType", StringType(), True),
@@ -68,10 +66,8 @@ announcements_schema = StructType([
     StructField("dwLastModifieddatetime", TimestampType(), True)
 ])
 
-# List of New Folders (and corresponding Redshift tables) to process
 folders = [
     ("announcements", "announcement"),
-    # Add other folders if required
 ]
 
 def process_folder(folder, redshift_table, schema):
@@ -81,25 +77,34 @@ def process_folder(folder, redshift_table, schema):
         logger.info(f"Full S3 Folder Path: {folder_path}")
 
         # Read CSV from S3
-        df = spark.read.csv(folder_path, header=True, inferSchema=True)
+        df = spark.read.csv(folder_path, header=True, inferSchema=False)  # Disable inferSchema for explicit control
+
+        logger.debug("First few rows of the DataFrame:")
+        df.show(5)
+        logger.debug("Initial schema after reading:")
+        df.printSchema()
 
         # Handle missing data for mandatory fields
-        df = df.fillna({"tenantid": 0, "announcementId": 0, "announcementNumber": ""})
+        mandatory_fields = ["tenantid", "announcementId", "announcementNumber"]
+        for field in mandatory_fields:
+            df = df.na.fill({field: "0" if field in ["tenantid", "announcementId"] else ""})
 
         # Apply schema
         for field in schema.fields:
             if isinstance(field.dataType, TimestampType):
-                df = df.withColumn(field.name, to_timestamp(col(field.name)))
+                df = df.withColumn(field.name, to_timestamp(col(field.name), "yyyy-MM-dd HH:mm:ss"))
             else:
                 df = df.withColumn(field.name, col(field.name).cast(field.dataType))
+            logger.debug(f"Applied schema for field {field.name}: {field.dataType}")
 
-        logger.info(f"Schema for {folder}:")
+        logger.info(f"Final schema for {folder}:")
         df.printSchema()
-        logger.info(f"Sample Data from {folder}:")
+        logger.info(f"Sample Data from {folder} after schema application:")
         df.show(5)
 
         # Convert DataFrame to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(df, glueContext, "dynamic_frame")
+        logger.debug(f"DynamicFrame conversion for {folder} complete")
 
         # Truncate the Redshift table before loading new data
         truncate_query = f"TRUNCATE TABLE {config['REDSHIFT_SCHEMA']}.{redshift_table};"
@@ -115,6 +120,8 @@ def process_folder(folder, redshift_table, schema):
             },
             redshift_tmp_dir=config['REDSHIFT_TEMP_DIR']
         )
+        logger.info(f"Successfully wrote data from {folder} to Redshift table {redshift_table}")
+
     except Exception as e:
         logger.error(f"Error processing {folder}: {str(e)}")
         raise

@@ -1,4 +1,5 @@
 import sys
+import logging
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
@@ -8,6 +9,19 @@ from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql.functions import col, to_timestamp
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, FloatType, BooleanType, TimestampType
 
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Function to load configuration from environment variables or AWS Systems Manager Parameter Store
+def load_config():
+    # Here, you would typically fetch these from AWS Parameter Store or Secrets Manager
+    return {
+        "S3_PATH": "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/",
+        "REDSHIFT_TEMP_DIR": "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/",
+        "REDSHIFT_DATABASE": "hcd-dev-db",
+    }
+
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
 sc = SparkContext()
@@ -16,30 +30,14 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-# S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
-redshift_database = "hcd-dev-db"
-redshift_schema = "usastaffing_staging"
+config = load_config()
+config['REDSHIFT_SCHEMA'] = "usastaffing_staging"
 
-# List of New Folders (and corresponding Redshift tables) to process
-folders = [
-    ("announcements", "announcement"),
-    ("certificateapplications", "certificateapplication"),
-    ("certificates", "certificate"),
-    ("customers", "customer"),
-    ("newhires", "new_hire"),
-    ("offices", "office"),
-    ("organizations", "organization"),
-    ("tth", "tth"),
-    ("requests", "request")
-]
-
-# Define the schema for the announcements table
+# Define schema for announcements table matching Redshift DDL
 announcements_schema = StructType([
-    StructField("tennantid", IntegerType(), True),
-    StructField("announcementId", LongType(), True),
-    StructField("announcementNumber", StringType(), True),
+    StructField("tenantid", IntegerType(), False),  # NOT NULL in Redshift
+    StructField("announcementId", LongType(), False),  # NOT NULL in Redshift
+    StructField("announcementNumber", StringType(), False),  # NOT NULL in Redshift
     StructField("announcementStatus", StringType(), True),
     StructField("announcementTemplate", StringType(), True),
     StructField("salaryType", StringType(), True),
@@ -50,7 +48,7 @@ announcements_schema = StructType([
     StructField("openDate", TimestampType(), True),
     StructField("closeDate", TimestampType(), True),
     StructField("releasedFlag", BooleanType(), True),
-    StructField("releasedDateTime", TimestampType(), True),
+    StructField("releaseddatetime", TimestampType(), True),
     StructField("applicationLimitSetFlag", BooleanType(), True),
     StructField("applicationLimit", IntegerType(), True),
     StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
@@ -70,51 +68,60 @@ announcements_schema = StructType([
     StructField("dwLastModifieddatetime", TimestampType(), True)
 ])
 
-# Process Each Folder
-for folder, redshift_table in folders:
-    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+# List of New Folders (and corresponding Redshift tables) to process
+folders = [
+    ("announcements", "announcement"),
+    # Add other folders if required
+]
 
-    folder_path = f"{s3_path}{folder}/"
-    print(f"Full S3 Folder Path: {folder_path}")
+def process_folder(folder, redshift_table, schema):
+    try:
+        folder_path = f"{config['S3_PATH']}{folder}/"
+        logger.info(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+        logger.info(f"Full S3 Folder Path: {folder_path}")
 
-    # Read CSV from S3
-    df = spark.read.csv(folder_path, header=True, inferSchema=True)
+        # Read CSV from S3
+        df = spark.read.csv(folder_path, header=True, inferSchema=True)
 
-    # Check and handle missing data for 'tennantid'
-    df = df.fillna({"tennantid": 0})  # Replacing NULL with 0 for 'tennantid'
-    # OR, you can drop rows with NULL 'tennantid'
-    # df = df.filter(col("tennantid").isNotNull())
+        # Handle missing data for mandatory fields
+        df = df.fillna({"tenantid": 0, "announcementId": 0, "announcementNumber": ""})
 
-    if folder == "announcements":
-        for field in announcements_schema.fields:
+        # Apply schema
+        for field in schema.fields:
             if isinstance(field.dataType, TimestampType):
                 df = df.withColumn(field.name, to_timestamp(col(field.name)))
             else:
                 df = df.withColumn(field.name, col(field.name).cast(field.dataType))
 
-    print(f"Schema for {folder}:")
-    df.printSchema()
-    print(f"Sample Data from {folder}:")
-    df.show(5)
+        logger.info(f"Schema for {folder}:")
+        df.printSchema()
+        logger.info(f"Sample Data from {folder}:")
+        df.show(5)
 
-    # Convert DataFrame to DynamicFrame
-    dynamic_frame = DynamicFrame.fromDF(df, glueContext, "dynamic_frame")
+        # Convert DataFrame to DynamicFrame
+        dynamic_frame = DynamicFrame.fromDF(df, glueContext, "dynamic_frame")
 
-    # Truncate the Redshift table before loading new data
-    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-    print(f"Executing: {truncate_query}")
+        # Truncate the Redshift table before loading new data
+        truncate_query = f"TRUNCATE TABLE {config['REDSHIFT_SCHEMA']}.{redshift_table};"
+        logger.info(f"Executing: {truncate_query}")
 
-    # Write data to Redshift with truncate option
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame,
-        catalog_connection="Redshift connection_hcd-dev-db",
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": truncate_query
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection="Redshift connection_hcd-dev-db",
+            connection_options={
+                "dbtable": f"{config['REDSHIFT_SCHEMA']}.{redshift_table}",
+                "database": config["REDSHIFT_DATABASE"],
+                "preactions": truncate_query
+            },
+            redshift_tmp_dir=config['REDSHIFT_TEMP_DIR']
+        )
+    except Exception as e:
+        logger.error(f"Error processing {folder}: {str(e)}")
+        raise
+
+# Process Each Folder
+for folder, redshift_table in folders:
+    process_folder(folder, redshift_table, announcements_schema)
 
 # Commit Job
 job.commit()

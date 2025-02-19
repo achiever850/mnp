@@ -80,6 +80,11 @@ for folder, redshift_table in folders:
     # Read CSV from S3
     df = spark.read.csv(folder_path, header=True, inferSchema=True)
 
+    # Check and handle missing data for 'tennantid'
+    df = df.fillna({"tennantid": 0})  # Replacing NULL with 0 for 'tennantid'
+    # OR, you can drop rows with NULL 'tennantid'
+    # df = df.filter(col("tennantid").isNotNull())
+
     if folder == "announcements":
         for field in announcements_schema.fields:
             if isinstance(field.dataType, TimestampType):

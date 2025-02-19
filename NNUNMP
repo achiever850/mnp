@@ -16,28 +16,56 @@ job.init(args["JOB_NAME"], args)
 
 # S3 and Redshift Configurations
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
+redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
 # List of New Folders (and corresponding Redshift tables) to process
 folders = [
-    ("announcements", "announcement"),
-    ("certificateapplications", "certificateapplication"),
-    ("certificates", "certificate"),
-    ("customers", "customer"),
-    ("newhires", "new_hire"),
-    ("offices", "office"),
-    ("organizations", "organization"),
-    ("tth", "tth"),
-    ("requests", "request")
+    ("announcements", "announcement")
+    # Add other folders and corresponding tables as needed
 ]
+
+# Expected schema for Announcement table
+expected_schema = {
+    "tennantid": "int",
+    "announcementId": "bigint",
+    "announcementNumber": "string",
+    "announcementstatus": "string",
+    "announcementTemplate": "string",
+    "salaryType": "string",
+    "minimumSalary": "double",
+    "maximumSalary": "double",
+    "notToExceed": "string",
+    "totalOpenings": "string",
+    "openDate": "timestamp",
+    "closeDate": "timestamp",
+    "releasedFlag": "boolean",
+    "releaseddatetime": "timestamp",
+    "applicationLimitSetFlag": "boolean",
+    "applicationLimit": "int",
+    "displayDefaultBenefitsTextFlag": "boolean",
+    "externalContactId": "bigint",
+    "externalContactName": "string",
+    "externalContactEmail": "string",
+    "internalContactId": "bigint",
+    "internalContactName": "string",
+    "internalContactEmail": "string",
+    "usajobsControlNumber": "bigint",
+    "linkedUSAJOBSCONTROLNUMBER": "string",
+    "WhoMayApply": "string",
+    "whoMayApplyOverrideText": "string",
+    "promotionpotential": "string",
+    "usajobstatus": "string",
+    "lastmodifieddatetime": "timestamp",
+    "dwLastModifieddatetime": "timestamp"
+}
 
 # Process Each Folder
 for folder, redshift_table in folders:
     print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-    
+
     # Construct the full S3 path to the folder
     folder_path = f"{s3_path}{folder}/"
     print(f"Full S3 Folder Path: {folder_path}")
@@ -49,6 +77,10 @@ for folder, redshift_table in folders:
         format="csv",
         format_options={"withHeader": True, "separator": ","}
     )
+
+    # Map data types
+    mappings = [(key, "string", key, expected_schema[key]) for key in expected_schema]
+    dynamic_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
     # Convert to DataFrame for inspection (optional)
     df = dynamic_frame.toDF()

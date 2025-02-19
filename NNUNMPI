@@ -1,77 +1,71 @@
 import sys
-from awsglue.transforms import *
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import IntegerType, LongType, FloatType, BooleanType, StringType, TimestampType
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
+from awsglue.utils import getResolvedOptions
 
-# Initialize Glue context and job
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
+# Initialize Glue Context
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+spark = SparkSession.builder.config("spark.sql.debug.maxToStringFields", "100").getOrCreate()
+glueContext = GlueContext(spark)
 job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+job.init(args['JOB_NAME'], args)
 
-# S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
+# S3 Path and Redshift Configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements.csv"
+redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
+redshift_table = "announcement"
 
-# Folder to Redshift Table Mapping
-table_mappings = {
-    "announcements": "announcement",
-    "certificateapplications": "certificateapplication",
-    "certificates": "certificate",
-    "customers": "customer",
-    "newhires": "new_hire",
-    "offices": "office",
-    "organizations": "organization",
-    "tth": "tth",
-    "requests": "request"
-}
+# Read CSV into DataFrame
+df = spark.read.format("csv") \
+    .option("header", "true") \
+    .option("inferSchema", "false") \
+    .option("delimiter", ",") \
+    .load(s3_path)
 
-# Process Each Folder
-for folder, redshift_table in table_mappings.items():
-    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-    
-    # Construct the full S3 path to the folder
-    folder_path = f"{s3_path}{folder}/"
-    print(f"Full S3 Folder Path: {folder_path}")
+# Explicit Type Casting for Redshift Schema
+df = df.withColumn("tennantid", col("tennantid").cast(IntegerType())) \
+       .withColumn("announcementId", col("announcementId").cast(LongType())) \
+       .withColumn("minimumSalary", col("minimumSalary").cast(FloatType())) \
+       .withColumn("maximumSalary", col("maximumSalary").cast(FloatType())) \
+       .withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd HH:mm:ss")) \
+       .withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd HH:mm:ss")) \
+       .withColumn("releasedFlag", col("releasedFlag").cast(BooleanType())) \
+       .withColumn("releaseddatetime", to_timestamp(col("releaseddatetime"), "yyyy-MM-dd HH:mm:ss")) \
+       .withColumn("applicationLimit", col("applicationLimit").cast(IntegerType())) \
+       .withColumn("lastmodifieddatetime", to_timestamp(col("lastmodifieddatetime"), "yyyy-MM-dd HH:mm:ss")) \
+       .withColumn("dwLastModifieddatetime", to_timestamp(col("dwLastModifieddatetime"), "yyyy-MM-dd HH:mm:ss"))
 
-    # Read CSV from S3
-    dynamic_frame = glueContext.create_dynamic_frame.from_options(
-        connection_type="s3",
-        connection_options={"paths": [folder_path]},
-        format="csv",
-        format_options={"withHeader": True, "separator": ","}
-    )
+# Handle NULL values for NOT NULL columns
+df = df.fillna({
+    "tennantid": 0,
+    "announcementId": 0,
+    "minimumSalary": 0.0,
+    "maximumSalary": 0.0,
+    "releasedFlag": False,
+    "applicationLimit": 0
+})
 
-    # Convert to DataFrame
-    df = dynamic_frame.toDF()
-    print(f"Schema for {folder}:")
-    df.printSchema()
-    print(f"Sample Data from {folder}:")
-    df.show(5)
+# Convert DataFrame to DynamicFrame for Glue
+dynamic_frame = DynamicFrame.fromDF(df, glueContext)
 
-    # Truncate the Redshift table before loading new data
-    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-    print(f"Executing: {truncate_query}")
+# Write to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=dynamic_frame,
+    catalog_connection=redshift_connection,
+    connection_options={
+        "database": redshift_database,
+        "dbtable": f"{redshift_schema}.{redshift_table}",
+        "aws_iam_role": "arn:aws:iam::094737541415:role/RedshiftGlueRole",
+        "batchsize": "50000"  # Adjust batch size for performance
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
 
-    # Write data to Redshift with truncate option
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": truncate_query
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
-
-# Commit Job
 job.commit()

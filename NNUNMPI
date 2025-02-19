@@ -18,7 +18,7 @@ job.init(args["JOB_NAME"], args)
 
 # S3 and Redshift Configurations
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-redshift_connection = "hcd_dev_redshift_connection"
+redshift_connection = "Redshift connection_hcd-dev_db"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
@@ -33,7 +33,7 @@ folders = [
     ("offices", "office"),
     ("organizations", "organization"),
     ("tth", "tth"),
-    ("requests", "request")
+    ("requests", "request"),
 ]
 
 # Define the schema for the announcements table
@@ -68,26 +68,23 @@ announcements_schema = StructType([
     StructField("promotionpotential", StringType(), True),
     StructField("usajobstatus", StringType(), True),
     StructField("lastmodifieddatetime", TimestampType(), True),
-    StructField("dwLastModifieddatetime", TimestampType(), True)
+    StructField("dwLastModifieddatetime", TimestampType(), True),
 ])
 
 # Process Each Folder
 for folder, redshift_table in folders:
     print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-    
+
     folder_path = f"{s3_path}{folder}/"
     print(f"Full S3 Folder Path: {folder_path}")
 
     # Read CSV from S3
-    df = spark.read.csv(folder_path, header=True, inferSchema=True)
-
     if folder == "announcements":
-        for field in announcements_schema.fields:
-            if isinstance(field.dataType, TimestampType):
-                df = df.withColumn(field.name, to_timestamp(col(field.name)))
-            else:
-                df = df.withColumn(field.name, col(field.name).cast(field.dataType))
+        df = spark.read.format("csv").option("header", "true").schema(announcements_schema).load(folder_path)
+    else:
+        df = spark.read.format("csv").option("header", "true").option("inferSchema", "true").load(folder_path)
 
+    # Print Schema and Sample Data
     print(f"Schema for {folder}:")
     df.printSchema()
     print(f"Sample Data from {folder}:")

@@ -1,61 +1,85 @@
 import sys
+from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
+from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import col
-from pyspark.sql.types import IntegerType, LongType, BooleanType, FloatType, TimestampType, StringType
+from pyspark.sql.functions import col, to_timestamp, when, lit
 
-# Initialize Glue and Spark Contexts
+## @params: [JOB_NAME]
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
 
-# Mapping of S3 folders to Redshift tables
-s3_base_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-table_mappings = {
-    "announcements": "announcement"
-}
-
-# Redshift Config
-redshift_connection = "hcd_dev_redshift_connection"
+# Define S3 Path and Redshift configurations
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements"
+redshift_connection_name = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_table = "announcement"
 
-# Iterate through each folder-table mapping
-for s3_folder, redshift_table in table_mappings.items():
-    s3_path = f"{s3_base_path}{s3_folder}/"
+# Read data from S3
+datasource0 = glueContext.create_dynamic_frame.from_options(
+    format_options={'withHeader': True, 'separator': ','},
+    connection_type="s3",
+    format="csv",
+    connection_options={
+        "paths": [s3_path],
+        "recurse": True
+    },
+    transformation_ctx="datasource0"
+)
 
-    # Read CSV into Spark DataFrame
-    df = spark.read.option("header", "true").csv(s3_path)
+# Convert DynamicFrame to DataFrame for easier manipulation
+df = datasource0.toDF()
 
-    # Cast columns to match Redshift schema (modify as needed)
-    df = df.withColumn("tennantid", col("tennantid").cast(IntegerType())) \
-           .withColumn("announcementId", col("announcementId").cast(LongType())) \
-           .withColumn("minimumSalary", col("minimumSalary").cast(FloatType())) \
-           .withColumn("maximumSalary", col("maximumSalary").cast(FloatType())) \
-           .withColumn("openDate", col("openDate").cast(TimestampType())) \
-           .withColumn("closeDate", col("closeDate").cast(TimestampType())) \
-           .withColumn("releasedFlag", col("releasedFlag").cast(BooleanType())) \
-           .withColumn("applicationLimit", col("applicationLimit").cast(IntegerType())) \
-           .withColumn("lastmodifieddatetime", col("lastmodifieddatetime").cast(TimestampType())) \
-           .withColumn("dwLastModifieddatetime", col("dwLastModifieddatetime").cast(TimestampType()))
+# Rename columns to match Redshift table structure
+df = df.withColumnRenamed("tenantId", "tennantid") \
+       .withColumnRenamed("announcementId", "announcement Id") \
+       .withColumnRenamed("announcementStatus", "announcement status") \
+       .withColumnRenamed("linkedUSAJOBSControlNumber", "linkedUSAJOBSCONTROLNUMBER") \
+       .withColumnRenamed("whoMayApply", "WhoMayApply")
 
-    # Convert to Glue DynamicFrame
-    dynamic_frame = DynamicFrame.fromDF(df, glueContext, "dynamic_frame")
+# Handle required NOT NULL columns
+df = df.withColumn("tennantid", 
+                   when(col("tennantid").isNull(), lit(0)).otherwise(col("tennantid").cast("int")))
+df = df.withColumn("announcement Id", 
+                   when(col("announcement Id").isNull(), lit(0)).otherwise(col("announcement Id").cast("bigint")))
+df = df.withColumn("announcementNumber", 
+                   when(col("announcementNumber").isNull(), lit("")).otherwise(col("announcementNumber").cast("string")))
 
-    # Write to Redshift
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "database": redshift_database,
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "aws_iam_role": "arn:aws:iam::094737541415:role/RedshiftGlueRole",
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
+# Convert string columns to appropriate types
+df = df.withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSS"))
+df = df.withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSS"))
+df = df.withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSS"))
+df = df.withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSS"))
+df = df.withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSS"))
 
-    print(f"Data loaded successfully from {s3_path} to Redshift table {redshift_schema}.{redshift_table}")
+# Convert boolean strings to actual boolean values
+df = df.withColumn("releasedFlag", col("releasedFlag") == "true")
+df = df.withColumn("applicationLimitSetFlag", col("applicationLimitSetFlag") == "true")
+df = df.withColumn("displayDefaultBenefitsTextFlag", col("displayDefaultBenefitsTextFlag") == "true")
 
-print("All data loads completed successfully!")
+# Convert numeric types
+df = df.withColumn("minimumSalary", col("minimumSalary").cast("float"))
+df = df.withColumn("maximumSalary", col("maximumSalary").cast("float"))
+df = df.withColumn("applicationLimit", col("applicationLimit").cast("int"))
+df = df.withColumn("externalContactId", col("externalContactId").cast("bigint"))
+df = df.withColumn("internalContactId", col("internalContactId").cast("bigint"))
+df = df.withColumn("usajobsControlNumber", col("usajobsControlNumber").cast("bigint"))
+
+# Write to Redshift using AWS Glue Connection
+df.write \
+  .format("jdbc") \
+  .option("dbtable", f"{redshift_schema}.{redshift_table}") \
+  .option("tempdir", redshift_temp_dir) \
+  .option("connectionName", redshift_connection_name) \
+  .mode("append") \
+  .save()
+
+job.commit()

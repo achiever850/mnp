@@ -19,9 +19,9 @@ job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
 # 1. Define S3 source (CSV file location)
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"  # Your S3 path
+s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
 source_data = glueContext.create_dynamic_frame.from_options(
-    format_options={"multiline": False, "withHeader": True},  # Assuming CSV has headers
+    format_options={"multiline": False, "withHeader": True},
     connection_type="s3",
     format="csv",
     connection_options={"paths": [s3_path], "recurse": True},
@@ -31,63 +31,76 @@ source_data = glueContext.create_dynamic_frame.from_options(
 # 2. Convert DynamicFrame to DataFrame for transformations
 df = source_data.toDF()
 
-# 3. Rename columns if CSV names differ from Redshift (update as needed based on CSV)
-# Example: If CSV uses "announcement Id" or "announcement_id", rename to "announcementid"
-df = df.withColumnRenamed("announcement Id", "announcementid")  # Remove if not needed
-df = df.withColumnRenamed("announcement status", "announcement_status")  # Remove or adjust if different
+# 3. No column renaming needed for announcementid and announcementstatus
 
-# 4. Cast data types to match Redshift DDL (update as needed based on CSV)
+# 4. Cast data types to match Redshift DDL
 df = df.withColumn("tenantid", df["tenantid"].cast(IntegerType()))
-df = df.withColumn("announcementid", df["announcementid"].cast(LongType()))  # For bigint
+df = df.withColumn("announcementid", df["announcementid"].cast(LongType()))
 df = df.withColumn("announcementNumber", df["announcementNumber"].cast(StringType()))
-df = df.withColumn("announcement_status", df["announcement_status"].cast(StringType()))
+df = df.withColumn("announcementstatus", df["announcementstatus"].cast(StringType()))
 df = df.withColumn("announcementTemplate", df["announcementTemplate"].cast(StringType()))
 df = df.withColumn("salaryType", df["salaryType"].cast(StringType()))
-df = df.withColumn("minimumSalary", df["minimumSalary"].cast(FloatType()))  # For real
-df = df.withColumn("maximumSalary", df["maximumSalary"].cast(FloatType()))  # For real
+df = df.withColumn("minimumSalary", df["minimumSalary"].cast(FloatType()))
+df = df.withColumn("maximumSalary", df["maximumSalary"].cast(FloatType()))
 df = df.withColumn("notToExceed", df["notToExceed"].cast(StringType()))
 df = df.withColumn("totalOpenings", df["totalOpenings"].cast(StringType()))
-df = df.withColumn("openDate", df["openDate"].cast(TimestampType()))  # For datetime
-df = df.withColumn("closeDate", df["closeDate"].cast(TimestampType()))  # For datetime
+df = df.withColumn("openDate", df["openDate"].cast(TimestampType()))
+df = df.withColumn("closeDate", df["closeDate"].cast(TimestampType()))
 df = df.withColumn("releasedFlag", df["releasedFlag"].cast(BooleanType()))
 df = df.withColumn("releaseddatetime", df["releaseddatetime"].cast(TimestampType()))
 df = df.withColumn("applicationLimitSetFlag", df["applicationLimitSetFlag"].cast(BooleanType()))
 df = df.withColumn("applicationLimit", df["applicationLimit"].cast(IntegerType()))
 df = df.withColumn("displayDefaultBenefitsTextFlag", df["displayDefaultBenefitsTextFlag"].cast(BooleanType()))
-df = df.withColumn("externalContactId", df["externalContactId"].cast(LongType()))  # For bigint
+df = df.withColumn("externalContactId", df["externalContactId"].cast(LongType()))
 df = df.withColumn("externalContactName", df["externalContactName"].cast(StringType()))
 df = df.withColumn("externalContactEmail", df["externalContactEmail"].cast(StringType()))
-df = df.withColumn("internalContactId", df["internalContactId"].cast(LongType()))  # For bigint
+df = df.withColumn("internalContactId", df["internalContactId"].cast(LongType()))
 df = df.withColumn("internalContactName", df["internalContactName"].cast(StringType()))
 df = df.withColumn("internalContactEmail", df["internalContactEmail"].cast(StringType()))
-df = df.withColumn("usajobsControlNumber", df["usajobsControlNumber"].cast(LongType()))  # For bigint
+df = df.withColumn("usajobsControlNumber", df["usajobsControlNumber"].cast(LongType()))
 df = df.withColumn("linkedUSAJOBSCONTROLNUMBER", df["linkedUSAJOBSCONTROLNUMBER"].cast(StringType()))
 df = df.withColumn("WhoMayApply", df["WhoMayApply"].cast(StringType()))
 df = df.withColumn("whoMayApplyOverrideText", df["whoMayApplyOverrideText"].cast(StringType()))
 df = df.withColumn("promotionpotential", df["promotionpotential"].cast(StringType()))
+df = df.withColumn("remoteJobClarificationText", df["remoteJobClarificationText"].cast(StringType()))
 df = df.withColumn("usajobsJobStatus", df["usajobsJobStatus"].cast(StringType()))
 df = df.withColumn("lastmodifieddatetime", df["lastmodifieddatetime"].cast(TimestampType()))
 df = df.withColumn("dwLastModifieddatetime", df["dwLastModifieddatetime"].cast(TimestampType()))
 
-# 5. Check for NULL values in NOT NULL columns (tenantid, announcementid, announcementNumber)
+# 5. Check for NULL values in NOT NULL columns and filter them out
 not_null_columns = ["tenantid", "announcementid", "announcementNumber"]
 null_counts = {col: df.filter(F.col(col).isNull()).count() for col in not_null_columns}
 
-# Log and fail if any NOT NULL columns have null values
+# Log null counts and filter out rows with nulls in NOT NULL columns
+logger = glueContext.get_logger()
+total_rows = df.count()
 for col, count in null_counts.items():
     if count > 0:
-        raise ValueError(f"Found {count} null values in column '{col}', which is defined as NOT NULL in Redshift. Please handle these nulls before loading.")
+        logger.info(f"Found {count} null values in column '{col}'. These rows will be dropped.")
+
+# Filter out rows where any NOT NULL column is null
+df_filtered = df.filter(
+    F.col("tenantid").isNotNull() &
+    F.col("announcementid").isNotNull() &
+    F.col("announcementNumber").isNotNull()
+)
+
+# Log the number of rows dropped
+rows_after_filter = df_filtered.count()
+rows_dropped = total_rows - rows_after_filter
+if rows_dropped > 0:
+    logger.info(f"Dropped {rows_dropped} rows with null values in NOT NULL columns. {rows_after_filter} rows remaining.")
 
 # 6. Convert back to DynamicFrame
-transformed_data = DynamicFrame.fromDF(df, glueContext, "transformed_data")
+transformed_data = DynamicFrame.fromDF(df_filtered, glueContext, "transformed_data")
 
 # 7. Define Redshift connection and target table
-redshift_database = "hcd-dev-db"  # Your Redshift database
-redshift_schema = "usastaffing_staging"  # Your Redshift schema
-redshift_table = "announcement"  # Assuming this is the table name based on DDL; update if different
-redshift_jdbc_url = "jdbc:redshift://hcd-dev-redshiftcluster.czcd1vi5pnl6.us-gov-west-1.redshift.amazonaws.com:5439/hcd-dev-db"  # Your JDBC URL
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"  # Your temporary S3 path
-iam_role = "arn:aws-us-gov:iam::094737541415:role/project/project-hcd-redshift-role"  # Your IAM role ARN
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
+redshift_table = "announcement"
+redshift_jdbc_url = "jdbc:redshift://hcd-dev-redshiftcluster.czcd1vi5pnl6.us-gov-west-1.redshift.amazonaws.com:5439/hcd-dev-db"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+iam_role = "arn:aws-us-gov:iam::094737541415:role/project/project-hcd-redshift-role"
 
 # 8. Write data to Redshift using direct JDBC connection
 glueContext.write_dynamic_frame.from_options(

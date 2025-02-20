@@ -11,109 +11,132 @@ from pyspark.sql.types import IntegerType, LongType, StringType, FloatType, Time
 # Parse job arguments
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
-# Initialize Spark and Glue contexts
+# Initialize Spark and Glue contexts with additional configuration
 sc = SparkContext()
+sc.setLogLevel("INFO")  # Set Spark logging level for more detailed output
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+
+# Configure Spark to handle larger datasets and avoid shutdown
+spark.conf.set("spark.sql.shuffle.partitions", "200")  # Adjust based on data size
+spark.conf.set("spark.default.parallelism", "100")     # Increase parallelism
+spark.conf.set("spark.sql.adaptive.enabled", "true")   # Enable adaptive query execution
+
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-# 1. Define S3 source (CSV file location)
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-source_data = glueContext.create_dynamic_frame.from_options(
-    format_options={"multiline": False, "withHeader": True},
-    connection_type="s3",
-    format="csv",
-    connection_options={"paths": [s3_path], "recurse": True},
-    transformation_ctx="source_data"
-)
-
-# 2. Convert DynamicFrame to DataFrame for transformations
-df = source_data.toDF()
-
-# 3. No column renaming needed for announcementid and announcementstatus
-
-# 4. Cast data types to match Redshift DDL
-df = df.withColumn("tenantid", df["tenantid"].cast(IntegerType()))
-df = df.withColumn("announcementid", df["announcementid"].cast(LongType()))
-df = df.withColumn("announcementNumber", df["announcementNumber"].cast(StringType()))
-df = df.withColumn("announcementstatus", df["announcementstatus"].cast(StringType()))
-df = df.withColumn("announcementTemplate", df["announcementTemplate"].cast(StringType()))
-df = df.withColumn("salaryType", df["salaryType"].cast(StringType()))
-df = df.withColumn("minimumSalary", df["minimumSalary"].cast(FloatType()))
-df = df.withColumn("maximumSalary", df["maximumSalary"].cast(FloatType()))
-df = df.withColumn("notToExceed", df["notToExceed"].cast(StringType()))
-df = df.withColumn("totalOpenings", df["totalOpenings"].cast(StringType()))
-df = df.withColumn("openDate", df["openDate"].cast(TimestampType()))
-df = df.withColumn("closeDate", df["closeDate"].cast(TimestampType()))
-df = df.withColumn("releasedFlag", df["releasedFlag"].cast(BooleanType()))
-df = df.withColumn("releaseddatetime", df["releaseddatetime"].cast(TimestampType()))
-df = df.withColumn("applicationLimitSetFlag", df["applicationLimitSetFlag"].cast(BooleanType()))
-df = df.withColumn("applicationLimit", df["applicationLimit"].cast(IntegerType()))
-df = df.withColumn("displayDefaultBenefitsTextFlag", df["displayDefaultBenefitsTextFlag"].cast(BooleanType()))
-df = df.withColumn("externalContactId", df["externalContactId"].cast(LongType()))
-df = df.withColumn("externalContactName", df["externalContactName"].cast(StringType()))
-df = df.withColumn("externalContactEmail", df["externalContactEmail"].cast(StringType()))
-df = df.withColumn("internalContactId", df["internalContactId"].cast(LongType()))
-df = df.withColumn("internalContactName", df["internalContactName"].cast(StringType()))
-df = df.withColumn("internalContactEmail", df["internalContactEmail"].cast(StringType()))
-df = df.withColumn("usajobsControlNumber", df["usajobsControlNumber"].cast(LongType()))
-df = df.withColumn("linkedUSAJOBSCONTROLNUMBER", df["linkedUSAJOBSCONTROLNUMBER"].cast(StringType()))
-df = df.withColumn("WhoMayApply", df["WhoMayApply"].cast(StringType()))
-df = df.withColumn("whoMayApplyOverrideText", df["whoMayApplyOverrideText"].cast(StringType()))
-df = df.withColumn("promotionpotential", df["promotionpotential"].cast(StringType()))
-df = df.withColumn("remoteJobClarificationText", df["remoteJobClarificationText"].cast(StringType()))
-df = df.withColumn("usajobsJobStatus", df["usajobsJobStatus"].cast(StringType()))
-df = df.withColumn("lastmodifieddatetime", df["lastmodifieddatetime"].cast(TimestampType()))
-df = df.withColumn("dwLastModifieddatetime", df["dwLastModifieddatetime"].cast(TimestampType()))
-
-# 5. Check for NULL values in NOT NULL columns and filter them out
-not_null_columns = ["tenantid", "announcementid", "announcementNumber"]
-null_counts = {col: df.filter(F.col(col).isNull()).count() for col in not_null_columns}
-
-# Log null counts and filter out rows with nulls in NOT NULL columns
 logger = glueContext.get_logger()
-total_rows = df.count()
-for col, count in null_counts.items():
-    if count > 0:
-        logger.info(f"Found {count} null values in column '{col}'. These rows will be dropped.")
+logger.info("Job started with JOB_NAME: {}".format(args['JOB_NAME']))
 
-# Filter out rows where any NOT NULL column is null
-df_filtered = df.filter(
-    F.col("tenantid").isNotNull() &
-    F.col("announcementid").isNotNull() &
-    F.col("announcementNumber").isNotNull()
-)
+try:
+    # 1. Define S3 source (CSV file location)
+    s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+    logger.info(f"Reading data from S3 path: {s3_path}")
+    source_data = glueContext.create_dynamic_frame.from_options(
+        format_options={"multiline": False, "withHeader": True, "quoteChar": '"', "escapeChar": "\\"},
+        connection_type="s3",
+        format="csv",
+        connection_options={"paths": [s3_path], "recurse": True},
+        transformation_ctx="source_data"
+    )
+    logger.info(f"Successfully created DynamicFrame with {source_data.count()} records")
 
-# Log the number of rows dropped
-rows_after_filter = df_filtered.count()
-rows_dropped = total_rows - rows_after_filter
-if rows_dropped > 0:
-    logger.info(f"Dropped {rows_dropped} rows with null values in NOT NULL columns. {rows_after_filter} rows remaining.")
+    # 2. Convert DynamicFrame to DataFrame for transformations
+    df = source_data.toDF()
+    logger.info(f"Converted to DataFrame with {df.count()} rows")
 
-# 6. Convert back to DynamicFrame
-transformed_data = DynamicFrame.fromDF(df_filtered, glueContext, "transformed_data")
+    # 3. Cast data types to match Redshift DDL
+    logger.info("Starting column type casting")
+    df = df.withColumn("tenantid", df["tenantid"].cast(IntegerType()))
+    df = df.withColumn("announcementid", df["announcementid"].cast(LongType()))
+    df = df.withColumn("announcementNumber", df["announcementNumber"].cast(StringType()))
+    df = df.withColumn("announcementstatus", df["announcementstatus"].cast(StringType()))
+    df = df.withColumn("announcementTemplate", df["announcementTemplate"].cast(StringType()))
+    df = df.withColumn("salaryType", df["salaryType"].cast(StringType()))
+    df = df.withColumn("minimumSalary", df["minimumSalary"].cast(FloatType()))
+    df = df.withColumn("maximumSalary", df["maximumSalary"].cast(FloatType()))
+    df = df.withColumn("notToExceed", df["notToExceed"].cast(StringType()))
+    df = df.withColumn("totalOpenings", df["totalOpenings"].cast(StringType()))
+    df = df.withColumn("openDate", df["openDate"].cast(TimestampType()))
+    df = df.withColumn("closeDate", df["closeDate"].cast(TimestampType()))
+    df = df.withColumn("releasedFlag", df["releasedFlag"].cast(BooleanType()))
+    df = df.withColumn("releaseddatetime", df["releaseddatetime"].cast(TimestampType()))
+    df = df.withColumn("applicationLimitSetFlag", df["applicationLimitSetFlag"].cast(BooleanType()))
+    df = df.withColumn("applicationLimit", df["applicationLimit"].cast(IntegerType()))
+    df = df.withColumn("displayDefaultBenefitsTextFlag", df["displayDefaultBenefitsTextFlag"].cast(BooleanType()))
+    df = df.withColumn("externalContactId", df["externalContactId"].cast(LongType()))
+    df = df.withColumn("externalContactName", df["externalContactName"].cast(StringType()))
+    df = df.withColumn("externalContactEmail", df["externalContactEmail"].cast(StringType()))
+    df = df.withColumn("internalContactId", df["internalContactId"].cast(LongType()))
+    df = df.withColumn("internalContactName", df["internalContactName"].cast(StringType()))
+    df = df.withColumn("internalContactEmail", df["internalContactEmail"].cast(StringType()))
+    df = df.withColumn("usajobsControlNumber", df["usajobsControlNumber"].cast(LongType()))
+    df = df.withColumn("linkedUSAJOBSCONTROLNUMBER", df["linkedUSAJOBSCONTROLNUMBER"].cast(StringType()))
+    df = df.withColumn("WhoMayApply", df["WhoMayApply"].cast(StringType()))
+    df = df.withColumn("whoMayApplyOverrideText", df["whoMayApplyOverrideText"].cast(StringType()))
+    df = df.withColumn("promotionpotential", df["promotionpotential"].cast(StringType()))
+    df = df.withColumn("remoteJobClarificationText", df["remoteJobClarificationText"].cast(StringType()))
+    df = df.withColumn("usajobsJobStatus", df["usajobsJobStatus"].cast(StringType()))
+    df = df.withColumn("lastmodifieddatetime", df["lastmodifieddatetime"].cast(TimestampType()))
+    df = df.withColumn("dwLastModifieddatetime", df["dwLastModifieddatetime"].cast(TimestampType()))
+    logger.info("Completed column type casting")
 
-# 7. Define Redshift connection and target table
-redshift_database = "hcd-dev-db"
-redshift_schema = "usastaffing_staging"
-redshift_table = "announcement"
-redshift_jdbc_url = "jdbc:redshift://hcd-dev-redshiftcluster.czcd1vi5pnl6.us-gov-west-1.redshift.amazonaws.com:5439/hcd-dev-db"
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
-iam_role = "arn:aws-us-gov:iam::094737541415:role/project/project-hcd-redshift-role"
+    # 5. Check for NULL values in NOT NULL columns and filter them out
+    not_null_columns = ["tenantid", "announcementid", "announcementNumber"]
+    null_counts = {col: df.filter(F.col(col).isNull()).count() for col in not_null_columns}
 
-# 8. Write data to Redshift using direct JDBC connection
-glueContext.write_dynamic_frame.from_options(
-    frame=transformed_data,
-    connection_type="redshift",
-    connection_options={
-        "url": redshift_jdbc_url,
-        "dbtable": f"{redshift_schema}.{redshift_table}",
-        "redshiftTmpDir": redshift_temp_dir,
-        "aws_iam_role": iam_role
-    },
-    transformation_ctx="target_data"
-)
+    total_rows = df.count()
+    logger.info(f"Total rows before filtering: {total_rows}")
+
+    for col, count in null_counts.items():
+        if count > 0:
+            logger.info(f"Found {count} null values in column '{col}'. These rows will be dropped.")
+
+    # Filter out rows where any NOT NULL column is null
+    df_filtered = df.filter(
+        F.col("tenantid").isNotNull() &
+        F.col("announcementid").isNotNull() &
+        F.col("announcementNumber").isNotNull()
+    )
+
+    rows_after_filter = df_filtered.count()
+    rows_dropped = total_rows - rows_after_filter
+    if rows_dropped > 0:
+        logger.info(f"Dropped {rows_dropped} rows with null values in NOT NULL columns. {rows_after_filter} rows remaining.")
+    else:
+        logger.info("No rows dropped due to null values in NOT NULL columns.")
+
+    # 6. Convert back to DynamicFrame
+    transformed_data = DynamicFrame.fromDF(df_filtered, glueContext, "transformed_data")
+    logger.info(f"Converted back to DynamicFrame with {transformed_data.count()} records")
+
+    # 7. Define Redshift connection and target table
+    redshift_database = "hcd-dev-db"
+    redshift_schema = "usastaffing_staging"
+    redshift_table = "announcement"
+    redshift_jdbc_url = "jdbc:redshift://hcd-dev-redshiftcluster.czcd1vi5pnl6.us-gov-west-1.redshift.amazonaws.com:5439/hcd-dev-db"
+    redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+    iam_role = "arn:aws-us-gov:iam::094737541415:role/project/project-hcd-redshift-role"
+
+    # 8. Write data to Redshift
+    logger.info("Writing data to Redshift")
+    glueContext.write_dynamic_frame.from_options(
+        frame=transformed_data,
+        connection_type="redshift",
+        connection_options={
+            "url": redshift_jdbc_url,
+            "dbtable": f"{redshift_schema}.{redshift_table}",
+            "redshiftTmpDir": redshift_temp_dir,
+            "aws_iam_role": iam_role
+        },
+        transformation_ctx="target_data"
+    )
+    logger.info("Successfully wrote data to Redshift")
+
+except Exception as e:
+    logger.error(f"Job failed with exception: {str(e)}", exc_info=True)
+    raise  # Re-raise the exception to ensure Glue job fails and logs the error
 
 # Commit the job
 job.commit()
+logger.info("Job committed successfully")

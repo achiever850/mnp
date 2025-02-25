@@ -25,9 +25,9 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Schema for announcements table (corrected tenantid)
+## Schema for announcements table
 schema = StructType([
-    StructField("tenantid", IntegerType(), False),  # Corrected from tennantid
+    StructField("tenantid", IntegerType(), False),  # Expecting integer, will filter for 8
     StructField("announcementId", LongType(), False),
     StructField("announcementNumber", StringType(), False),
     StructField("announcement_status", StringType(), True),
@@ -60,7 +60,7 @@ schema = StructType([
     StructField("dwLastModifieddatetime", StringType(), True)
 ])
 
-## Read, filter, and transform announcements data
+## Read and process announcements data
 print("Reading CSV from: {}".format(s3_announcements_path))
 df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
@@ -71,17 +71,19 @@ print("Initial row count: {}".format(df.count()))
 print("Sample raw data (first 5 rows):")
 df.show(5, truncate=False)
 
+# Filter for tenantid = 8 only, plus other NOT NULL constraints
 filtered_df = df.filter(
-    (col("tenantid").isNotNull()) &  # Corrected from tennantid
+    (col("tenantid") == 8) & 
+    (col("tenantid").isNotNull()) & 
     (col("announcementId").isNotNull()) & 
     (col("announcementNumber").isNotNull())
 )
-print("Filtered row count: {}".format(filtered_df.count()))
+print("Filtered row count (tenantid = 8 only): {}".format(filtered_df.count()))
 print("Sample filtered data (first 5 rows):")
 filtered_df.show(5, truncate=False)
 
 transformed_df = filtered_df.select(
-    col("tenantid"),  # Corrected from tennantid
+    col("tenantid"),
     col("announcementId"),
     col("announcementNumber"),
     col("announcement_status"),
@@ -117,8 +119,8 @@ print("Transformed row count: {}".format(transformed_df.count()))
 print("Sample transformed data (first 5 rows):")
 transformed_df.show(5, truncate=False)
 
-## Write to Redshift with truncate and error handling
-print("Writing to Redshift table: {}".format(redshift_table))
+## Write to Redshift with detailed error handling
+print("Attempting to write to Redshift table: {}".format(redshift_table))
 try:
     glueContext.write_dynamic_frame.from_jdbc_conf(
         frame=DynamicFrame.fromDF(transformed_df, glueContext, "announcement_frame"),
@@ -132,7 +134,10 @@ try:
     )
     print("Data write completed successfully")
 except Exception as e:
-    print("Error writing to Redshift: {}".format(str(e)))
+    print("Detailed error writing to Redshift: {}".format(str(e)))
+    print("Exception type: {}".format(type(e).__name__))
+    import traceback
+    print("Stack trace: {}".format(traceback.format_exc()))
     raise
 
 ## Commit the job

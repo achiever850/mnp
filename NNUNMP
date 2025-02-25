@@ -3,7 +3,7 @@ from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from awsglue.dynamicframe import DynamicFrame  # Added this import
+from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, TimestampType
@@ -17,7 +17,8 @@ s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_table = "usastaffing_staging.office"
+redshift_schema = "usastaffing_staging"
+redshift_table = f"{redshift_schema}.office"
 
 ## Initialize Spark and Glue context
 sc = SparkContext()
@@ -26,35 +27,56 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(job_name, args)
 
+## Log start
+print("Starting Glue job: {}".format(job_name))
+
 ## Define the schema manually based on the Redshift table
 schema = StructType([
-    StructField("tennantId", IntegerType(), False),           # int NOT NULL
-    StructField("officeId", LongType(), False),              # bigint NOT NULL
-    StructField("officeName", StringType(), True),           # varchar(100)
-    StructField("officeCode", StringType(), True),           # varchar(10)
-    StructField("externalName", StringType(), True),         # varchar(50)
-    StructField("addressline1", StringType(), True),         # varchar(100)
-    StructField("addressline2", StringType(), True),         # varchar(100)
-    StructField("addressline3", StringType(), True),         # varchar(100)
-    StructField("city", StringType(), True),                 # varchar(100)
-    StructField("zipcode", StringType(), True),              # varchar(50)
-    StructField("state", StringType(), True),                # varchar(50)
-    StructField("stateabbrevation", StringType(), True),     # varchar(5)
-    StructField("country", StringType(), True),              # varchar(100)
-    StructField("countryAbbrevation", StringType(), True),   # char(5)
-    StructField("phonenumber", StringType(), True),          # varchar(50)
-    StructField("faxnumber", StringType(), True),            # varchar(50)
-    StructField("dwlastmodifiedDateTime", StringType(), True) # datetime (read as string, convert later)
+    StructField("tennantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
 ])
 
 ## Read CSV from S3 with the manual schema
+print("Reading CSV from: {}".format(s3_input_path))
 csv_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
     .schema(schema) \
     .csv(s3_input_path)
 
-## Map and cast columns (convert dwlastmodifiedDateTime to timestamp)
-csv_df = csv_df.select(
+## Log initial row count
+print("Initial CSV row count: {}".format(csv_df.count()))
+csv_df.printSchema()
+
+## Filter out rows with NULL in NOT NULL fields
+print("Filtering rows with NULL in tennantId or officeId")
+filtered_df = csv_df.filter(
+    (col("tennantId").isNotNull()) & (col("officeId").isNotNull())
+)
+
+## Log filtered row count
+filtered_count = filtered_df.count()
+print("Filtered CSV row count (non-null tennantId and officeId): {}".format(filtered_count))
+if filtered_count < csv_df.count():
+    print("Warning: {} rows dropped due to NULL values in tennantId or officeId".format(csv_df.count() - filtered_count))
+
+## Map and cast columns
+print("Mapping columns and converting timestamp")
+final_df = filtered_df.select(
     col("tennantId").alias("tennantId"),
     col("officeId").alias("officeId"),
     col("officeName").alias("officeName"),
@@ -74,16 +96,22 @@ csv_df = csv_df.select(
     to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd HH:mm:ss").alias("dwlastmodifiedDateTime")
 )
 
-## Write to Redshift
-glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=DynamicFrame.fromDF(csv_df, glueContext, "redshift_frame"),
-    catalog_connection=redshift_connection,
-    connection_options={
-        "dbtable": redshift_table,
-        "database": redshift_database
-    },
-    redshift_tmp_dir=redshift_temp_dir
-)
+## Write to Redshift with error handling
+print("Writing to Redshift table: {}".format(redshift_table))
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(final_df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print("Data write completed successfully")
+except Exception as e:
+    print("Error writing to Redshift: {}".format(str(e)))
+    raise
 
 ## Commit the job
 job.commit()

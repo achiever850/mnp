@@ -27,7 +27,7 @@ job.init(args['JOB_NAME'], args)
 
 ## Schema for announcements table
 schema = StructType([
-    StructField("tenantid", IntegerType(), False),  # Expecting integer, will filter for 8
+    StructField("tenantid", IntegerType(), False),
     StructField("announcementId", LongType(), False),
     StructField("announcementNumber", StringType(), False),
     StructField("announcement_status", StringType(), True),
@@ -60,85 +60,62 @@ schema = StructType([
     StructField("dwLastModifieddatetime", StringType(), True)
 ])
 
-## Read and process announcements data
-print("Reading CSV from: {}".format(s3_announcements_path))
+## Read, filter, and transform announcements data
 df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
     .schema(schema) \
-    .csv(s3_announcements_path)
-
-print("Initial row count: {}".format(df.count()))
-print("Sample raw data (first 5 rows):")
-df.show(5, truncate=False)
-
-# Filter for tenantid = 8 only, plus other NOT NULL constraints
-filtered_df = df.filter(
-    (col("tenantid") == 8) & 
-    (col("tenantid").isNotNull()) & 
-    (col("announcementId").isNotNull()) & 
-    (col("announcementNumber").isNotNull())
-)
-print("Filtered row count (tenantid = 8 only): {}".format(filtered_df.count()))
-print("Sample filtered data (first 5 rows):")
-filtered_df.show(5, truncate=False)
-
-transformed_df = filtered_df.select(
-    col("tenantid"),
-    col("announcementId"),
-    col("announcementNumber"),
-    col("announcement_status"),
-    col("announcementTemplate"),
-    col("salaryType"),
-    col("minimumSalary"),
-    col("maximumSalary"),
-    col("notToExceed"),
-    col("totalOpenings"),
-    to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("openDate"),
-    to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("closeDate"),
-    col("releasedFlag"),
-    to_timestamp(col("releaseddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("releaseddatetime"),
-    col("applicationLimitSetFlag"),
-    col("applicationLimit"),
-    col("displayDefaultBenefitsTextFlag"),
-    col("externalContactId"),
-    col("externalContactName"),
-    col("externalContactEmail"),
-    col("internalContactId"),
-    col("internalContactName"),
-    col("internalContactEmail"),
-    col("usajobsControlNumber"),
-    col("linkedUSAJOBSCONTROLNUMBER"),
-    col("WhoMayApply"),
-    col("whoMayApplyOverrideText"),
-    col("promotionpotential"),
-    col("usajobstatus"),
-    to_timestamp(col("lastmodifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("lastmodifieddatetime"),
-    to_timestamp(col("dwLastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwLastModifieddatetime")
-)
-print("Transformed row count: {}".format(transformed_df.count()))
-print("Sample transformed data (first 5 rows):")
-transformed_df.show(5, truncate=False)
-
-## Write to Redshift with detailed error handling
-print("Attempting to write to Redshift table: {}".format(redshift_table))
-try:
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=DynamicFrame.fromDF(transformed_df, glueContext, "announcement_frame"),
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": redshift_table,
-            "database": redshift_database,
-            "preactions": f"TRUNCATE TABLE {redshift_table}"
-        },
-        redshift_tmp_dir=redshift_temp_dir
+    .csv(s3_announcements_path) \
+    .filter(
+        (col("tenantid") == 8) & 
+        (col("tenantid").isNotNull()) & 
+        (col("announcementId").isNotNull()) & 
+        (col("announcementNumber").isNotNull())
+    ) \
+    .select(
+        col("tenantid"),
+        col("announcementId"),
+        col("announcementNumber"),
+        col("announcement_status"),
+        col("announcementTemplate"),
+        col("salaryType"),
+        col("minimumSalary"),
+        col("maximumSalary"),
+        col("notToExceed"),
+        col("totalOpenings"),
+        to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("openDate"),
+        to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("closeDate"),
+        col("releasedFlag"),
+        to_timestamp(col("releaseddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("releaseddatetime"),
+        col("applicationLimitSetFlag"),
+        col("applicationLimit"),
+        col("displayDefaultBenefitsTextFlag"),
+        col("externalContactId"),
+        col("externalContactName"),
+        col("externalContactEmail"),
+        col("internalContactId"),
+        col("internalContactName"),
+        col("internalContactEmail"),
+        col("usajobsControlNumber"),
+        col("linkedUSAJOBSCONTROLNUMBER"),
+        col("WhoMayApply"),
+        col("whoMayApplyOverrideText"),
+        col("promotionpotential"),
+        col("usajobstatus"),
+        to_timestamp(col("lastmodifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("lastmodifieddatetime"),
+        to_timestamp(col("dwLastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwLastModifieddatetime")
     )
-    print("Data write completed successfully")
-except Exception as e:
-    print("Detailed error writing to Redshift: {}".format(str(e)))
-    print("Exception type: {}".format(type(e).__name__))
-    import traceback
-    print("Stack trace: {}".format(traceback.format_exc()))
-    raise
+
+## Write to Redshift with truncate
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
 
 ## Commit the job
 job.commit()

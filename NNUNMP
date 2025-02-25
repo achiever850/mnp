@@ -98,7 +98,8 @@ final_df = filtered_df.select(
 print("Sample transformed data (first 5 rows):")
 final_df.show(5, truncate=False)
 
-## Write to Redshift
+## Write to Redshift with truncate
+print("Truncating Redshift table: {}".format(redshift_table))
 print("Writing to Redshift table: {}".format(redshift_table))
 try:
     glueContext.write_dynamic_frame.from_jdbc_conf(
@@ -107,7 +108,7 @@ try:
         connection_options={
             "dbtable": redshift_table,
             "database": redshift_database,
-            "preactions": f"TRUNCATE TABLE {redshift_table}"  # Clear table first
+            "preactions": f"TRUNCATE TABLE {redshift_table}"  # Truncates table before loading
         },
         redshift_tmp_dir=redshift_temp_dir
     )

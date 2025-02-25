@@ -58,9 +58,12 @@ csv_df = spark.read.option("header", "true") \
     .schema(schema) \
     .csv(s3_input_path)
 
-## Log initial row count
+## Log initial row count and sample raw data
 print("Initial CSV row count: {}".format(csv_df.count()))
+print("CSV schema:")
 csv_df.printSchema()
+print("Sample raw data (first 5 rows):")
+csv_df.show(5, truncate=False)
 
 ## Filter out rows with NULL in NOT NULL fields
 print("Filtering rows with NULL in tennantId or officeId")
@@ -68,11 +71,13 @@ filtered_df = csv_df.filter(
     (col("tennantId").isNotNull()) & (col("officeId").isNotNull())
 )
 
-## Log filtered row count
+## Log filtered row count and sample filtered data
 filtered_count = filtered_df.count()
 print("Filtered CSV row count (non-null tennantId and officeId): {}".format(filtered_count))
 if filtered_count < csv_df.count():
     print("Warning: {} rows dropped due to NULL values in tennantId or officeId".format(csv_df.count() - filtered_count))
+print("Sample filtered data (first 5 rows):")
+filtered_df.show(5, truncate=False)
 
 ## Map and cast columns
 print("Mapping columns and converting timestamp")
@@ -95,6 +100,10 @@ final_df = filtered_df.select(
     col("faxnumber").alias("faxnumber"),
     to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd HH:mm:ss").alias("dwlastmodifiedDateTime")
 )
+
+## Log transformed data
+print("Sample transformed data (first 5 rows):")
+final_df.show(5, truncate=False)
 
 ## Write to Redshift with error handling
 print("Writing to Redshift table: {}".format(redshift_table))

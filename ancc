@@ -1,3 +1,293 @@
+To view keyboard shortcuts, press question mark
+View keyboard shortcuts
+
+See new posts
+hi
+Hello! How can I assist you today?
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
+Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.office"
+Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+Define schema
+schema = StructType([
+    StructField("tennantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+Read, filter, and transform data
+df = spark.read.option("header", "true") 
+    .option("delimiter", ",") 
+    .schema(schema) 
+    .csv(s3_input_path) 
+    .filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) 
+    .select(
+        col("tennantId"),
+        col("officeId"),
+        col("officeName"),
+        col("officeCode"),
+        col("externalName"),
+        col("addressline1"),
+        col("addressline2"),
+        col("addressline3"),
+        col("city"),
+        col("zipcode"),
+        col("state"),
+        col("stateabbrevation"),
+        col("country"),
+        col("countryAbbrevation"),
+        col("phonenumber"),
+        col("faxnumber"),
+        to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastmodifiedDateTime")
+    )
+Write to Redshift with truncate
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+Commit the job
+job.commit()
+It looks like you've shared an AWS Glue ETL script written in Python using PySpark. This script reads CSV data from an S3 bucket, applies a predefined schema, filters and transforms the data, and then writes it to a Redshift table with a truncate operation. How can I assist you with this? Are you looking for help with debugging, optimization, or understanding any specific part of the code? Let me know what you're aiming for!
+this script was working fine in the morning but NOW I'm gettung the below error
+error category: UNCLASSFIED_ERROR; Failed line number :105; An error occured while calling 02028.py writedynamicframe. exception thrown await rdsult
+The error you're encountering—“UNCLASSIFIED_ERROR” with a reference to line 105 and write_dynamic_frame—suggests something went wrong during the process of writing the data to Redshift. Since the script was working earlier today (February 25, 2025) but is now failing, it’s likely an environmental or data-related issue rather than a syntax error in the code itself. Let’s troubleshoot this step-by-step.
+Understanding the Error
+Error Location: The failure occurs in the glueContext.write_dynamic_frame.from_jdbc_conf call, which is responsible for writing the transformed data to Redshift.
+Line 105: Based on the script you provided, this corresponds to the glueContext.write_dynamic_frame block (around the Redshift write operation).
+“Exception thrown await result”: This is a generic Glue/PySpark error indicating the job failed to complete the write operation, but the root cause isn’t explicitly surfaced in the message.
+Possible Causes
+Since it was working earlier, here are the most likely culprits:
+Redshift Connection Issue:
+The connection hcd_dev_redshift_connection might be misconfigured, unavailable, or the credentials have expired/rotated.
+S3 Temporary Directory Issue:
+The redshift_temp_dir (s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/) might have permissions issues or be inaccessible.
+Data Issue:
+New data in s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/ might not conform to the schema or could be corrupted (e.g., malformed CSV rows, unexpected nulls, or timestamp format mismatches).
+Redshift Table Issue:
+The table usastaffing_staging.office might have schema changes, locks, or insufficient permissions for the truncate operation.
+Resource Constraints:
+Glue or Redshift might be hitting resource limits (e.g., Redshift cluster overloaded, Glue job timeout).
+Steps to Diagnose and Fix
+Here’s how we can narrow it down:
+1. Check Glue Job Logs
+Go to the AWS Glue console, find your job run, and inspect the CloudWatch logs for more detailed error messages. Look for specifics like “permission denied,” “connection refused,” or “schema mismatch.”
+Search for the exact stack trace following “exception thrown await result” to pinpoint the root cause.
+2. Test the Redshift Connection
+Verify the hcd_dev_redshift_connection in the AWS Glue console:
+Test the connection manually to ensure it can reach the Redshift cluster.
+Confirm the IAM role used by Glue has permissions for Redshift (redshift:DescribeClusters, redshift:GetClusterCredentials, etc.) and S3 (s3:GetObject, s3:PutObject for the temp directory).
+3. Validate the S3 Input Data
+Since it worked earlier, new files might be the issue. Check the latest CSV files in s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/:
+Open a sample file and ensure it matches the schema (e.g., no missing headers, no extra columns, dwlastmodifiedDateTime in yyyy-MM-dd'T'HH:mm:ss.SSSSSSS format).
+Run a quick test with Spark locally (or in a Glue development endpoint) to read the data:
+python
+df = spark.read.option("header", "true").schema(schema).csv(s3_input_path)
+df.show(5)
+Look for parsing errors or nulls in tennantId or officeId that might slip through the filter.
+4. Inspect the Redshift Table
+Connect to Redshift (hcd-dev-db) and check:
+SELECT * FROM usastaffing_staging.office LIMIT 5; to confirm the schema matches your df columns.
+Ensure the Glue IAM role has TRUNCATE and INSERT permissions on usastaffing_staging.office.
+Check for any table locks: SELECT * FROM stv_locks; (if locked, wait or resolve with an admin).
+5. Verify S3 Temp Directory
+Ensure the Glue job’s IAM role has write access to s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/.
+Check if the bucket is accessible and not full or misconfigured (e.g., versioning issues or encryption mismatches).
+6. Simplify and Test
+Temporarily comment out the preactions truncate step and write to a test table:
+python
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": "usastaffing_staging.office_test",
+        "database": redshift_database
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+If this works, the issue is likely with the truncate operation or table permissions.
+Likely Fix
+Based on the timing (worked this morning, fails now), I’d bet on either:
+Data Corruption: A new CSV file breaking the schema or timestamp parsing.
+Redshift Connectivity: A credential or network issue with hcd_dev_redshift_connection.
+Start by checking the logs and validating the latest input data. If you share the detailed CloudWatch error message, I can refine this further! What do you think—want to try one of these steps?
+do you found any issues in the code
+Let’s review your AWS Glue script closely to see if there are any potential issues in the code itself that could contribute to the UNCLASSIFIED_ERROR you’re encountering during the write_dynamic_frame operation. Since it was working earlier today (February 25, 2025) and stopped, the problem might not be in the code syntax, but subtle logic or configuration issues could still be at play. I’ll analyze line-by-line and highlight anything that stands out.
+Code Review
+Here’s your script again, annotated with observations:
+python
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+# Observation: Looks fine. Assumes JOB_NAME is passed via Glue job arguments. No error handling if missing, but Glue typically ensures this.
+
+## Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.office"
+# Observation: Hardcoded paths and names. Fine if consistent, but if any of these (e.g., S3 bucket, Redshift connection) changed today, it could break.
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+# Observation: Standard Glue setup. No obvious issues here.
+
+## Define schema
+schema = StructType([
+    StructField("tennantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    # ... (other fields) ...
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+# Observation: Schema looks reasonable. 'False' for nullable on tenantId/officeId aligns with your filter below.
+# Potential Issue 1: If CSV data has nulls or malformed values in non-nullable fields (tennantId, officeId), parsing could fail silently before filtering.
+
+## Read, filter, and transform data
+df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(schema) \
+    .csv(s3_input_path) \
+    .filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .select(
+        # ... (columns) ...
+        to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastmodifiedDateTime")
+    )
+# Observation: Reads CSV with schema, filters non-null tenantId/officeId, transforms timestamp.
+# Potential Issue 2: The to_timestamp format "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS" expects exactly 7 decimal places for microseconds.
+#   - If new data has a different format (e.g., no microseconds, or different precision), this could fail or produce nulls, potentially breaking downstream writes.
+# Potential Issue 3: No error handling for malformed CSV rows (e.g., extra columns, missing headers). Spark might infer incorrectly if header/data mismatch occurs.
+
+## Write to Redshift with truncate
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+# Observation: Converts DataFrame to DynamicFrame and writes to Redshift with truncate.
+# Potential Issue 4: The 'preactions' truncate requires proper permissions. If Glue IAM role lost Redshift TRUNCATE privileges today, this fails.
+# Potential Issue 5: If df is empty (e.g., all rows filtered out), the write might still attempt, but Redshift interaction could fail unexpectedly.
+# Potential Issue 6: No explicit error handling or logging for write failures.
+
+## Commit the job
+job.commit()
+# Observation: Standard job commit. No issues here assuming prior steps succeed.
+Findings in the Code
+While the code is syntactically correct and follows Glue best practices, here are potential issues that could explain the failure:
+Timestamp Parsing (to_timestamp) Mismatch:
+The dwlastmodifiedDateTime transformation expects a very specific format (yyyy-MM-dd'T'HH:mm:ss.SSSSSSS). If new CSV data today has a slightly different timestamp format (e.g., fewer decimals, no 'T', or a different separator), it’ll produce null values. If Redshift’s target column doesn’t allow nulls, the write could fail.
+Fix: Add a sanity check before writing:
+python
+df.select("dwlastmodifiedDateTime").show(5)
+Or make the parsing more robust:
+python
+to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd['T']HH:mm:ss[.SSSSSSS]").alias("dwlastmodifiedDateTime")
+Schema Enforcement on Non-Nullable Fields:
+tennantId and officeId are non-nullable (False), but if the CSV has empty strings or malformed data, Spark might fail to parse them correctly before the filter kicks in. The filter then masks the issue, but downstream errors could arise.
+Fix: Add a debug step to check parsing:
+python
+df_raw = spark.read.option("header", "true").schema(schema).csv(s3_input_path)
+df_raw.filter((col("tennantId").isNull()) | (col("officeId").isNull())).show()
+Lack of Error Handling:
+There’s no try-catch or logging around the read or write operations. If something fails (e.g., S3 access, Redshift connection), you get a cryptic error like “UNCLASSIFIED_ERROR” without context.
+Fix: Wrap the write in a try-except:
+python
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database,
+            "preactions": f"TRUNCATE TABLE {redshift_table}"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+except Exception as e:
+    print(f"Write failed: {str(e)}")
+    raise
+Permissions or Configuration Drift:
+The TRUNCATE TABLE preaction assumes the Glue role has permissions. If IAM policies or Redshift table ownership changed today, this could fail.
+Fix: Test without truncate first (as suggested earlier).
+Empty DataFrame Edge Case:
+If all rows are filtered out (e.g., new CSV has no valid tennantId/officeId), the write might still proceed but fail in Redshift interaction.
+Fix: Check row count before writing:
+python
+if df.count() == 0:
+    print("No data to write after filtering")
+    job.commit()
+    sys.exit(0)
+Conclusion
+The code itself doesn’t have glaring syntax errors, but it’s vulnerable to:
+Data changes (timestamp format, nulls in non-nullable fields).
+Environmental changes (permissions, connection issues).
+Lack of diagnostics (no logging or error handling).
+Since it worked this morning, I suspect Potential Issue 1 (timestamp parsing) or Potential Issue 4 (permissions) as the most likely culprits, triggered by new data or an AWS configuration update today. I’d recommend:
+Add the timestamp fix and debug prints.
+Rerun with detailed logging enabled in Glue (CloudWatch).
+Share the full error stack trace from CloudWatch if it persists.
+What do you think—want to try tweaking the timestamp parsing first? Or do you have the logs handy to dig deeper?
+give me the updated code
+Below is the updated version of your AWS Glue script with the suggested improvements based on our analysis. I’ve added error handling, data validation, and a more flexible timestamp parsing approach to address the potential issues we discussed (e.g., timestamp mismatches, empty data, lack of diagnostics). The changes aim to make the script more robust and easier to debug, especially since it stopped working today (February 25, 2025).
+Updated Code
+python
 import sys
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
@@ -12,15 +302,11 @@ from pyspark.sql.types import StructType, StructField, IntegerType, LongType, St
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_office_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
-s3_org_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
-s3_customer_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/customers/"
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_office_table = "usastaffing_staging.office"
-redshift_org_table = "usastaffing_staging.organization"
-redshift_customer_table = "usastaffing_staging.customer"
+redshift_table = "usastaffing_staging.office"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -29,8 +315,156 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema for office
-office_schema = StructType([
+## Define schema
+schema = StructType([
+    StructField("tennantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
+## Read, filter, and transform data with validation
+try:
+    # Read raw data and check for parsing issues
+    df_raw = spark.read.option("header", "true") \
+        .option("delimiter", ",") \
+        .schema(schema) \
+        .csv(s3_input_path)
+    
+    # Log rows with nulls in non-nullable fields for debugging
+    null_check = df_raw.filter((col("tennantId").isNull()) | (col("officeId").isNull()))
+    if null_check.count() > 0:
+        print("Warning: Found rows with null tenantId or officeId:")
+        null_check.show(5)
+
+    # Apply filter and transformations
+    df = df_raw.filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
+        .select(
+            col("tennantId"),
+            col("officeId"),
+            col("officeName"),
+            col("officeCode"),
+            col("externalName"),
+            col("addressline1"),
+            col("addressline2"),
+            col("addressline3"),
+            col("city"),
+            col("zipcode"),
+            col("state"),
+            col("stateabbrevation"),
+            col("country"),
+            col("countryAbbrevation"),
+            col("phonenumber"),
+            col("faxnumber"),
+            # More flexible timestamp parsing
+            to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd['T']HH:mm:ss[.SSSSSSS]").alias("dwlastmodifiedDateTime")
+        )
+
+    # Check if there's data to write
+    row_count = df.count()
+    print(f"Rows to write after filtering: {row_count}")
+    if row_count == 0:
+        print("No data to write after filtering. Exiting job.")
+        job.commit()
+        sys.exit(0)
+
+    # Debug: Show sample data including transformed timestamp
+    print("Sample data before writing to Redshift:")
+    df.select("tennantId", "officeId", "dwlastmodifiedDateTime").show(5)
+
+except Exception as e:
+    print(f"Error during data reading or transformation: {str(e)}")
+    raise
+
+## Write to Redshift with truncate
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database,
+            "preactions": f"TRUNCATE TABLE {redshift_table}"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print(f"Successfully wrote {row_count} rows to {redshift_table}")
+except Exception as e:
+    print(f"Error writing to Redshift: {str(e)}")
+    raise
+
+## Commit the job
+job.commit()
+print("Job completed successfully")
+Key Changes and Improvements
+Flexible Timestamp Parsing:
+Changed to_timestamp format from "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS" to "yyyy-MM-dd['T']HH:mm:ss[.SSSSSSS]". The square brackets make the 'T' and microseconds optional, accommodating variations in the input data (e.g., missing microseconds or different separators).
+Data Validation:
+Added a check for nulls in tennantId and officeId before filtering, printing a warning with sample rows if any are found. This helps catch parsing issues early.
+Empty Data Check:
+Before writing, the script now checks df.count() and exits gracefully if no rows remain after filtering, preventing empty write attempts that might confuse Redshift.
+Error Handling:
+Wrapped the read/transform and write operations in try-except blocks to catch and log errors explicitly. This should give you a clearer error message than “UNCLASSIFIED_ERROR” in the CloudWatch logs.
+Debugging Output:
+Added print statements to log row counts and sample data (including the transformed dwlastmodifiedDateTime). This helps verify the data shape and timestamp conversion before the write.
+Logging Success:
+Prints a success message with the row count after writing to Redshift, making it easier to confirm the operation completed.
+How This Helps
+If the issue was a timestamp mismatch, the updated to_timestamp should handle it.
+If it was malformed data, the null check will flag it in the logs.
+If it’s a permissions/connection issue, the try-except around the write will surface a more specific error.
+If the DataFrame was empty, the script exits cleanly instead of failing obscurely.
+Next Steps
+Replace the original script with this version in your Glue job.
+Run the job and monitor the CloudWatch logs for output (e.g., null warnings, row counts, sample data, or error messages).
+If it still fails, share the detailed log output with me, and we’ll pinpoint the exact issue.
+This should give you a much better shot at identifying and fixing the problem. Let me know how it goes!
+please change tennantId to tenantid
+Here’s the updated code with tennantId corrected to tenantId throughout the script. I’ve ensured consistency in the schema definition, filter, select, and debug output. Everything else remains the same as the previous version, including the improvements for error handling, timestamp parsing, and data validation.
+Updated Code with tenantId
+python
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.office"
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define schema
+schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("officeId", LongType(), False),
     StructField("officeName", StringType(), True),
@@ -42,113 +476,541 @@ office_schema = StructType([
     StructField("city", StringType(), True),
     StructField("zipcode", StringType(), True),
     StructField("state", StringType(), True),
-    StructField("stateabbreviation", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
     StructField("country", StringType(), True),
-    StructField("countryAbbreviation", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
     StructField("phonenumber", StringType(), True),
     StructField("faxnumber", StringType(), True),
     StructField("dwlastmodifiedDateTime", StringType(), True)
 ])
 
-## Define schema for organization
-org_schema = StructType([
-    StructField("tenantID", IntegerType(), False),
-    StructField("orgId", IntegerType(), False),
-    StructField("tenantName", StringType(), True),
-    StructField("tenantcode", StringType(), True),
-    StructField("organizationName", StringType(), True),
-    StructField("organizationCode", StringType(), True),
-    StructField("dwlastModifieddatetime", StringType(), True)
-])
+## Read, filter, and transform data with validation
+try:
+    # Read raw data and check for parsing issues
+    df_raw = spark.read.option("header", "true") \
+        .option("delimiter", ",") \
+        .schema(schema) \
+        .csv(s3_input_path)
+    
+    # Log rows with nulls in non-nullable fields for debugging
+    null_check = df_raw.filter((col("tenantId").isNull()) | (col("officeId").isNull()))
+    if null_check.count() > 0:
+        print("Warning: Found rows with null tenantId or officeId:")
+        null_check.show(5)
 
-## Define schema for customers
-customer_schema = StructType([
-    StructField("tenantId", IntegerType(), False),
-    StructField("customerID", LongType(), False),
-    StructField("customerName", StringType(), True),
-    StructField("externalName", StringType(), True),
-    StructField("agencycode", StringType(), True),
-    StructField("agencyName", StringType(), True),
-    StructField("agencyReferenceCode", StringType(), True),
-    StructField("departmentCode", StringType(), True),
-    StructField("departmentName", StringType(), True),
-    StructField("addressLine1", StringType(), True),
-    StructField("addressline2", StringType(), True),
-    StructField("addressline3", StringType(), True),
-    StructField("city", StringType(), True),
-    StructField("ZipCode", StringType(), True),
-    StructField("state", StringType(), True),
-    StructField("stateAbbreviation", StringType(), True),
-    StructField("country", StringType(), True),
-    StructField("countryAbbreviation", StringType(), True),
-    StructField("phoneNumber", StringType(), True),
-    StructField("faxNumber", StringType(), True),
-    StructField("opfInstance", StringType(), True),
-    StructField("dwlastmodifiedDateTime", StringType(), True)
-])
+    # Apply filter and transformations
+    df = df_raw.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+        .select(
+            col("tenantId"),
+            col("officeId"),
+            col("officeName"),
+            col("officeCode"),
+            col("externalName"),
+            col("addressline1"),
+            col("addressline2"),
+            col("addressline3"),
+            col("city"),
+            col("zipcode"),
+            col("state"),
+            col("stateabbrevation"),
+            col("country"),
+            col("countryAbbrevation"),
+            col("phonenumber"),
+            col("faxnumber"),
+            # More flexible timestamp parsing
+            to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd['T']HH:mm:ss[.SSSSSSS]").alias("dwlastmodifiedDateTime")
+        )
 
-## Read and process office data
-office_df = spark.read.option("header", "true") \
-    .option("delimiter", ",") \
-    .schema(office_schema) \
-    .csv(s3_office_input_path)
+    # Check if there's data to write
+    row_count = df.count()
+    print(f"Rows to write after filtering: {row_count}")
+    if row_count == 0:
+        print("No data to write after filtering. Exiting job.")
+        job.commit()
+        sys.exit(0)
 
-office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
-    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+    # Debug: Show sample data including transformed timestamp
+    print("Sample data before writing to Redshift:")
+    df.select("tenantId", "officeId", "dwlastmodifiedDateTime").show(5)
 
-## Read and process organization data
-org_df = spark.read.option("header", "true") \
-    .option("delimiter", ",") \
-    .schema(org_schema) \
-    .csv(s3_org_input_path)
+except Exception as e:
+    print(f"Error during data reading or transformation: {str(e)}")
+    raise
 
-org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
-    .withColumn("dwlastModifieddatetime", to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
-
-## Read and process customer data
-customer_df = spark.read.option("header", "true") \
-    .option("delimiter", ",") \
-    .schema(customer_schema) \
-    .csv(s3_customer_input_path)
-
-customer_filtered_df = customer_df.filter((col("tenantId").isNotNull()) & (col("customerID").isNotNull())) \
-    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
-
-## Write office data to Redshift
-glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=DynamicFrame.fromDF(office_filtered_df, glueContext, "office_redshift_frame"),
-    catalog_connection=redshift_connection,
-    connection_options={
-        "dbtable": redshift_office_table,
-        "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_office_table}"
-    },
-    redshift_tmp_dir=redshift_temp_dir
-)
-
-## Write organization data to Redshift
-glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=DynamicFrame.fromDF(org_filtered_df, glueContext, "org_redshift_frame"),
-    catalog_connection=redshift_connection,
-    connection_options={
-        "dbtable": redshift_org_table,
-        "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_org_table}"
-    },
-    redshift_tmp_dir=redshift_temp_dir
-)
-
-## Write customer data to Redshift
-glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=DynamicFrame.fromDF(customer_filtered_df, glueContext, "customer_redshift_frame"),
-    catalog_connection=redshift_connection,
-    connection_options={
-        "dbtable": redshift_customer_table,
-        "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_customer_table}"
-    },
-    redshift_tmp_dir=redshift_temp_dir
-)
+## Write to Redshift with truncate
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database,
+            "preactions": f"TRUNCATE TABLE {redshift_table}"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print(f"Successfully wrote {row_count} rows to {redshift_table}")
+except Exception as e:
+    print(f"Error writing to Redshift: {str(e)}")
+    raise
 
 ## Commit the job
 job.commit()
+print("Job completed successfully")
+Changes Made
+Replaced every instance of tennantId with tenantId:
+In the schema definition: StructField("tenantId", IntegerType(), False).
+In the null check: col("tenantId").isNull().
+In the filter: col("tenantId").isNotNull().
+In the select: col("tenantId").
+In the debug output: df.select("tenantId", ...).
+Left all other logic and improvements intact (e.g., flexible timestamp parsing, error handling, data validation).
+Notes
+This correction assumes your CSV files and Redshift table use tenantId (with one "n") as the column name. If the actual source data or target table still uses tennantId, you’ll need to align those with this change, or the script won’t match the data.
+If this was a typo in the original script and the data uses tenantId, this fix could resolve the issue entirely, as the schema mismatch might have caused parsing or write failures.
+Deploy this version to your Glue job, run it, and check the CloudWatch logs for any errors or output. Let me know how it performs or if you need further adjustments!
+redshift_table = "usastaffing_staging.office" change to redshift_table = "usastaffing_staging.Office"
+Here’s the updated code with redshift_table changed from "usastaffing_staging.office" to "usastaffing_staging.Office". I’ve preserved all other changes, including the tenantId correction and the enhancements for error handling and data validation. Note that Redshift is case-insensitive for table names unless they’re explicitly quoted in the schema, so this change might only matter if the table was created with specific casing (e.g., using quotes like CREATE TABLE "Office").
+Updated Code
+python
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.Office"  # Changed from "usastaffing_staging.office"
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define schema
+schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
+## Read, filter, and transform data with validation
+try:
+    # Read raw data and check for parsing issues
+    df_raw = spark.read.option("header", "true") \
+        .option("delimiter", ",") \
+        .schema(schema) \
+        .csv(s3_input_path)
+    
+    # Log rows with nulls in non-nullable fields for debugging
+    null_check = df_raw.filter((col("tenantId").isNull()) | (col("officeId").isNull()))
+    if null_check.count() > 0:
+        print("Warning: Found rows with null tenantId or officeId:")
+        null_check.show(5)
+
+    # Apply filter and transformations
+    df = df_raw.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+        .select(
+            col("tenantId"),
+            col("officeId"),
+            col("officeName"),
+            col("officeCode"),
+            col("externalName"),
+            col("addressline1"),
+            col("addressline2"),
+            col("addressline3"),
+            col("city"),
+            col("zipcode"),
+            col("state"),
+            col("stateabbrevation"),
+            col("country"),
+            col("countryAbbrevation"),
+            col("phonenumber"),
+            col("faxnumber"),
+            # More flexible timestamp parsing
+            to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd['T']HH:mm:ss[.SSSSSSS]").alias("dwlastmodifiedDateTime")
+        )
+
+    # Check if there's data to write
+    row_count = df.count()
+    print(f"Rows to write after filtering: {row_count}")
+    if row_count == 0:
+        print("No data to write after filtering. Exiting job.")
+        job.commit()
+        sys.exit(0)
+
+    # Debug: Show sample data including transformed timestamp
+    print("Sample data before writing to Redshift:")
+    df.select("tenantId", "officeId", "dwlastmodifiedDateTime").show(5)
+
+except Exception as e:
+    print(f"Error during data reading or transformation: {str(e)}")
+    raise
+
+## Write to Redshift with truncate
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database,
+            "preactions": f"TRUNCATE TABLE {redshift_table}"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print(f"Successfully wrote {row_count} rows to {redshift_table}")
+except Exception as e:
+    print(f"Error writing to Redshift: {str(e)}")
+    raise
+
+## Commit the job
+job.commit()
+print("Job completed successfully")
+Changes Made
+Updated redshift_table = "usastaffing_staging.Office" (capitalized "O" in "Office").
+Ensured the preactions string uses the updated redshift_table variable: f"TRUNCATE TABLE {redshift_table}".
+No other modifications were made; all prior enhancements (e.g., tenantId, error handling) remain intact.
+Notes
+If the Redshift table was created as office (lowercase) and not explicitly quoted (e.g., CREATE TABLE "Office"), Redshift treats it as case-insensitive, and "usastaffing_staging.office" would still work. However, if the table name is explicitly "Office" (with quotes in the schema), this change aligns the script with that requirement.
+Test this version in your Glue job to confirm it resolves any table-name-related issues. Check the CloudWatch logs for success or any new errors.
+Let me know how it runs or if you need further tweaks!
+Please dont cretae any table or dont insert any column in the table
+I understand you don’t want the script to create a table or insert any new columns into the existing Redshift table (usastaffing_staging.Office). The original script and the updated versions I’ve provided don’t explicitly create tables or add columns—they only write data to an existing table (usastaffing_staging.Office) after truncating it, assuming the table already exists with the correct schema.
+The glueContext.write_dynamic_frame.from_jdbc_conf operation with the preactions set to TRUNCATE TABLE will:
+Truncate the existing table (delete all rows).
+Load the new data from the DataFrame into the table.
+It won’t create a table or modify the table’s structure (e.g., add columns) unless the schema of the DataFrame mismatches the table, which could cause an error.
+To ensure no unintended table creation or column insertion happens:
+I’ll keep the script focused on writing to the existing table without any create or alter actions.
+I’ll assume the Redshift table usastaffing_staging.Office already exists with a schema matching the DataFrame’s columns.
+Here’s the script again, unchanged from the last version, as it already aligns with your request. I’ve added a comment to clarify that it only writes to an existing table.
+Final Code (No Table Creation or Column Insertion)
+python
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.Office"  # Existing table, no creation or column insertion
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define schema
+schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
+## Read, filter, and transform data with validation
+try:
+    # Read raw data and check for parsing issues
+    df_raw = spark.read.option("header", "true") \
+        .option("delimiter", ",") \
+        .schema(schema) \
+        .csv(s3_input_path)
+    
+    # Log rows with nulls in non-nullable fields for debugging
+    null_check = df_raw.filter((col("tenantId").isNull()) | (col("officeId").isNull()))
+    if null_check.count() > 0:
+        print("Warning: Found rows with null tenantId or officeId:")
+        null_check.show(5)
+
+    # Apply filter and transformations
+    df = df_raw.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+        .select(
+            col("tenantId"),
+            col("officeId"),
+            col("officeName"),
+            col("officeCode"),
+            col("externalName"),
+            col("addressline1"),
+            col("addressline2"),
+            col("addressline3"),
+            col("city"),
+            col("zipcode"),
+            col("state"),
+            col("stateabbrevation"),
+            col("country"),
+            col("countryAbbrevation"),
+            col("phonenumber"),
+            col("faxnumber"),
+            # More flexible timestamp parsing
+            to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd['T']HH:mm:ss[.SSSSSSS]").alias("dwlastmodifiedDateTime")
+        )
+
+    # Check if there's data to write
+    row_count = df.count()
+    print(f"Rows to write after filtering: {row_count}")
+    if row_count == 0:
+        print("No data to write after filtering. Exiting job.")
+        job.commit()
+        sys.exit(0)
+
+    # Debug: Show sample data including transformed timestamp
+    print("Sample data before writing to Redshift:")
+    df.select("tenantId", "officeId", "dwlastmodifiedDateTime").show(5)
+
+except Exception as e:
+    print(f"Error during data reading or transformation: {str(e)}")
+    raise
+
+## Write to existing Redshift table with truncate (no table creation or column insertion)
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database,
+            "preactions": f"TRUNCATE TABLE {redshift_table}"  # Truncates existing table only
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print(f"Successfully wrote {row_count} rows to {redshift_table}")
+except Exception as e:
+    print(f"Error writing to Redshift: {str(e)}")
+    raise
+
+## Commit the job
+job.commit()
+print("Job completed successfully")
+Confirmation
+No Table Creation: The script doesn’t include any CREATE TABLE statements or logic to create usastaffing_staging.Office. It assumes the table already exists.
+No Column Insertion: The script only writes the DataFrame’s columns (tenantId, officeId, etc.) to the existing table. It won’t add new columns; if the DataFrame’s schema doesn’t match the table, the write will fail (which is expected behavior and will be caught by the try-except).
+Prerequisites
+Ensure the Redshift table usastaffing_staging.Office already exists with columns matching the DataFrame’s schema (e.g., tenantId as INTEGER, officeId as BIGINT, dwlastmodifiedDateTime as TIMESTAMP, etc.).
+Verify the Glue IAM role has permissions to TRUNCATE and INSERT into this table, but no CREATE or ALTER permissions are needed.
+Run this in your Glue job, and it should work as intended—truncating and loading data into the existing table without altering its structure. Let me know if you encounter any issues or need further clarification!
+Here is the updated ddl please modify the script according to the below ddl
+tenantId": int NOT NULL,
+      "officeId": int NOT NULL,
+      "officeName": "varchar(100)",
+      "officeCode": "varchar(100)",
+      "externalName": "varchar(100)",
+      "addressLine1": "varchar(100)",
+      "addressLine2": "varchar(100)",
+      "addressLine3": "varchar(100)",
+      "city": "varchar(100)",
+      "zipCode": "varchar(100)",
+      "state": "varchar(100)",
+      "stateAbbreviation": "char(5)",
+      "country": "varchar(100)",
+      "countryAbbreviation":"char(5)",
+      "phoneNumber": ""varchar(100)",,
+      "faxNumber": "varchar(100)",
+      "dwLastModifiedDateTime": "datetime",
+   example of    "dwLastModifiedDateTime": "2023-12-12T14:59:02.6005402-05:00",
+Thanks for sharing the updated DDL for the usastaffing_staging.Office table in Redshift, along with an example of the dwLastModifiedDateTime value. I’ll modify the script to align with this DDL, ensuring the schema in the script matches the table’s structure and that the timestamp parsing handles the provided format ("2023-12-12T14:59:02.6005402-05:00"). Here’s how I’ll adjust the script:
+Key Changes Based on the DDL
+Schema Updates:
+tenantId: Change from IntegerType() to IntegerType() (already correct, but confirming).
+officeId: Change from LongType() to IntegerType() (DDL specifies int in Redshift, not bigint).
+officeName, officeCode, externalName, addressLine1, addressLine2, addressLine3, city, zipCode, state, phoneNumber, faxNumber: Update to StringType() with max length considerations (Redshift varchar(100)), though PySpark doesn’t enforce length unless explicitly cast.
+stateAbbreviation, countryAbbreviation: Change to StringType() (Redshift char(5) is fixed-length, but PySpark treats it as a string; length enforcement happens in Redshift).
+dwLastModifiedDateTime: Keep as StringType() in the raw read, then convert to a timestamp with to_timestamp matching the example format.
+Timestamp Parsing:
+The example "2023-12-12T14:59:02.6005402-05:00" includes microseconds (up to 7 digits) and a timezone offset (-05:00). I’ll update the to_timestamp format to handle this precisely: "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX", where XXX accounts for the timezone offset.
+Column Name Case Sensitivity:
+Adjust column names to match the DDL’s casing (e.g., addressLine1 instead of addressline1, stateAbbreviation instead of stateabbrevation).
+Updated Script
+python
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.Office"  # Existing table, no creation or column insertion
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define schema matching Redshift DDL
+schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("officeId", IntegerType(), False),  # Changed from LongType to IntegerType
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressLine1", StringType(), True),  # Updated casing
+    StructField("addressLine2", StringType(), True),  # Updated casing
+    StructField("addressLine3", StringType(), True),  # Updated casing
+    StructField("city", StringType(), True),
+    StructField("zipCode", StringType(), True),  # Updated casing
+    StructField("state", StringType(), True),
+    StructField("stateAbbreviation", StringType(), True),  # Updated casing
+    StructField("country", StringType(), True),
+    StructField("countryAbbreviation", StringType(), True),  # Updated casing
+    StructField("phoneNumber", StringType(), True),  # Updated casing
+    StructField("faxNumber", StringType(), True),  # Updated casing
+    StructField("dwLastModifiedDateTime", StringType(), True)  # Updated casing
+])
+
+## Read, filter, and transform data with validation
+try:
+    # Read raw data and check for parsing issues
+    df_raw = spark.read.option("header", "true") \
+        .option("delimiter", ",") \
+        .schema(schema) \
+        .csv(s3_input_path)
+    
+    # Log rows with nulls in non-nullable fields for debugging
+    null_check = df_raw.filter((col("tenantId").isNull()) | (col("officeId").isNull()))
+    if null_check.count() > 0:
+        print("Warning: Found rows with null tenantId or officeId:")
+        null_check.show(5)
+
+    # Apply filter and transformations
+    df = df_raw.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+        .select(
+            col("tenantId"),
+            col("officeId"),
+            col("officeName"),
+            col("officeCode"),
+            col("externalName"),
+            col("addressLine1"),
+            col("addressLine2"),
+            col("addressLine3"),
+            col("city"),
+            col("zipCode"),
+            col("state"),
+            col("stateAbbreviation"),
+            col("country"),
+            col("countryAbbreviation"),
+            col("phoneNumber"),
+            col("faxNumber"),
+            # Updated timestamp parsing for "2023-12-12T14:59:02.6005402-05:00"
+            to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX").alias("dwLastModifiedDateTime")
+        )
+
+    # Check if there's data to write
+    row_count = df.count()
+    print(f"Rows to write after filtering: {row_count}")
+    if row_count == 0:
+        print("No data to write after filtering. Exiting job.")
+        job.commit()
+        sys.exit(0)
+
+    # Debug: Show sample data including transformed timestamp
+    print("Sample data before writing to Redshift:")
+    df.select("tenantId", "officeId", "dwLastModifiedDateTime").show(5)
+
+except Exception as e:
+    print(f"Error during data reading or transformation: {str(e)}")
+    raise
+
+## Write to existing Redshift table with truncate (no table creation or column insertion)
+try:
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_table,
+            "database": redshift_database,
+            "preactions": f"TRUNCATE TABLE {redshift_table}"  # Truncates existing table only
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print(f"Successfully wrote {row_count} rows to {redshift_table}")
+except Exception as e:
+    print(f"Error writing to Redshift: {str(e)}")
+    raise
+
+## Commit the job
+job.commit()
+print("Job completed successfully")
+Key Adjustments
+Schema Alignment:
+officeId changed from LongType() to IntegerType() to match Redshift’s int.
+Column names updated to match DDL casing (e.g., addressLine1, zipCode, stateAbbreviation, phoneNumber, dwLastModifiedDateTime).
+All varchar(100) and char(5) fields remain StringType() since PySpark doesn’t enforce length; Redshift will handle truncation or errors if data exceeds limits.
+Timestamp Format:
+Updated to_timestamp to "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX":
+SSS... handles up to 7-digit microseconds (e.g., 6005402 in the example).
+XXX parses the timezone offset (e.g., -05:00).
+This ensures the example "2023-12-12T14:59:02.6005402-05:00" converts correctly to a Redshift datetime (timestamp).
+No Structural Changes:
+The script still only truncates and inserts into the existing usastaffing_staging.Office table, with no CREATE TABLE or ALTER TABLE actions.
+Verification
+DDL Match: The DataFrame’s columns now exactly match the Redshift table’s columns in name, order, and data type compatibility.
+Timestamp Example: The format "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX" will parse "2023-12-12T14:59:02.6005402-05:00" into a timestamp like 2023-12-12 14:59:02.600540 -05:00, which Redshift accepts as datetime.
+Run this updated script in your Glue job and check the CloudWatch logs for output (e.g., sample data, row counts, or errors). If the issue persists, share the logs, and we’ll troubleshoot further. Let me know how it goes!
+Ask anything
+No file chosen

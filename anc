@@ -40,9 +40,9 @@ office_schema = StructType([
     StructField("city", StringType(), True),
     StructField("zipcode", StringType(), True),
     StructField("state", StringType(), True),
-    StructField("stateabbrevation", StringType(), True),
+    StructField("stateabbreviation", StringType(), True),  # Updated here
     StructField("country", StringType(), True),
-    StructField("countryAbbrevation", StringType(), True),
+    StructField("countryAbbreviation", StringType(), True),  # Updated here
     StructField("phonenumber", StringType(), True),
     StructField("faxnumber", StringType(), True),
     StructField("dwlastmodifiedDateTime", StringType(), True)
@@ -65,7 +65,11 @@ office_df = spark.read.option("header", "true") \
     .schema(office_schema) \
     .csv(s3_office_input_path)
 
-office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull()))
+# Parse the dwlastmodifiedDateTime column from the original string format and convert it to timestamp
+office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .withColumn(
+        "dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")
+    )
 
 ## Read and process organization data
 org_df = spark.read.option("header", "true") \
@@ -73,7 +77,11 @@ org_df = spark.read.option("header", "true") \
     .schema(org_schema) \
     .csv(s3_org_input_path)
 
-org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull()))
+# Parse the dwlastModifieddatetime column from the original string format and convert it to timestamp
+org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
+    .withColumn(
+        "dwlastModifieddatetime", to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")
+    )
 
 ## Write office data to Redshift
 glueContext.write_dynamic_frame.from_jdbc_conf(
@@ -82,7 +90,7 @@ glueContext.write_dynamic_frame.from_jdbc_conf(
     connection_options={
         "dbtable": redshift_office_table,
         "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_office_table}"
+        "preactions": f"TRUNCATE TABLE {redshift_office_table}"  # Ensure the table is truncated before loading
     },
     redshift_tmp_dir=redshift_temp_dir
 )
@@ -94,7 +102,7 @@ glueContext.write_dynamic_frame.from_jdbc_conf(
     connection_options={
         "dbtable": redshift_org_table,
         "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_org_table}"
+        "preactions": f"TRUNCATE TABLE {redshift_org_table}"  # Ensure the table is truncated before loading
     },
     redshift_tmp_dir=redshift_temp_dir
 )

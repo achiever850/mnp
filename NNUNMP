@@ -4,153 +4,63 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, FloatType, TimestampType, BooleanType
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, to_timestamp
 
-# Initialize Glue context and job
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
-sc = SparkContext()
-sc.setLogLevel("INFO")
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
-# Optimize Spark settings
-spark.conf.set("spark.sql.shuffle.partitions", "200")
-spark.conf.set("spark.default.parallelism", "100")
-spark.conf.set("spark.sql.adaptive.enabled", "true")
+job_name = args['JOB_NAME']
 
-job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
-logger = glueContext.get_logger()
-logger.info(f"Job started with JOB_NAME: {args['JOB_NAME']}")
-
-# S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"  # Updated S3 path
+## Hardcoded configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_schema = "usastaffing_staging"
+redshift_table = "usastaffing_staging.office"
 
-# List of Folders and Redshift Tables
-folders = [
-    ("announcements", "announcement"),
-    ("certificateapplications", "certificateapplication"),
-    ("certificates", "certificate"),
-    ("customers", "customer"),
-    ("newhires", "new_hire"),
-    ("offices", "office"),
-    ("organizations", "organization"),
-    ("tth", "tth"),
-    ("requests", "request")
-]
+## Initialize Spark and Glue context
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(job_name, args)
 
-# Define schema for announcements table with NOT NULL constraints
-announcements_schema = StructType([
-    StructField("tenantId", IntegerType(), nullable=False),
-    StructField("announcementId", LongType(), nullable=False),
-    StructField("announcementNumber", StringType(), nullable=False),
-    StructField("announcementStatus", StringType(), True),
-    StructField("announcementTemplate", StringType(), True),
-    StructField("salaryType", StringType(), True),
-    StructField("minimumSalary", FloatType(), True),
-    StructField("maximumSalary", FloatType(), True),
-    StructField("notToExceed", StringType(), True),
-    StructField("totalOpenings", StringType(), True),
-    StructField("openDate", TimestampType(), True),
-    StructField("closeDate", TimestampType(), True),
-    StructField("releasedFlag", BooleanType(), True),
-    StructField("releasedDateTime", TimestampType(), True),
-    StructField("applicationLimitSetFlag", BooleanType(), True),
-    StructField("applicationLimit", IntegerType(), True),
-    StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
-    StructField("externalContactId", LongType(), True),
-    StructField("externalContactName", StringType(), True),
-    StructField("externalContactEmail", StringType(), True),
-    StructField("internalContactId", LongType(), True),
-    StructField("internalContactName", StringType(), True),
-    StructField("internalContactEmail", StringType(), True),
-    StructField("usajobsControlNumber", LongType(), True),
-    StructField("linkedUSAJOBSCONTROLNUMBER", StringType(), True),
-    StructField("WhoMayApply", StringType(), True),
-    StructField("whoMayApplyOverrideText", StringType(), True),
-    StructField("promotionpotential", StringType(), True),
-    StructField("usajobstatus", StringType(), True),
-    StructField("lastmodifieddatetime", TimestampType(), True),
-    StructField("dwLastModifieddatetime", TimestampType(), True)
-])
+## Read CSV from S3 (assumes CSV files in the folder have headers)
+csv_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .csv(s3_input_path)
 
-# Process Each Folder
-for folder, redshift_table in folders:
-    try:
-        logger.info(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-        folder_path = f"{s3_path}{folder}/"
-        logger.info(f"Full S3 Folder Path: {folder_path}")
+## Map and cast columns to match Redshift table schema
+csv_df = csv_df.select(
+    col("tennantId").cast("integer").alias("tennantId"),
+    col("officeId").cast("bigint").alias("officeId"),
+    col("officeName").cast("string").alias("officeName"),
+    col("officeCode").cast("string").alias("officeCode"),
+    col("externalName").cast("string").alias("externalName"),
+    col("addressline1").cast("string").alias("addressline1"),
+    col("addressline2").cast("string").alias("addressline2"),
+    col("addressline3").cast("string").alias("addressline3"),
+    col("city").cast("string").alias("city"),
+    col("zipcode").cast("string").alias("zipcode"),
+    col("state").cast("string").alias("state"),
+    col("stateabbrevation").cast("string").alias("stateabbrevation"),
+    col("country").cast("string").alias("country"),
+    col("countryAbbrevation").cast("string").alias("countryAbbrevation"),
+    col("phonenumber").cast("string").alias("phonenumber"),
+    col("faxnumber").cast("string").alias("faxnumber"),
+    to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd HH:mm:ss").alias("dwlastmodifiedDateTime")
+)
 
-        if folder == "announcements":
-            logger.info("Applying custom schema for announcements with NOT NULL constraints")
-            df = spark.read \
-                .option("header", "true") \
-                .option("quote", '"') \
-                .option("escape", '"') \
-                .option("mode", "DROPMALFORMED") \
-                .schema(announcements_schema) \
-                .csv(folder_path)
-            
-            total_rows = df.count()
-            df_filtered = df.filter(
-                col("tenantId").isNotNull() &
-                col("announcementId").isNotNull() &
-                col("announcementNumber").isNotNull()
-            )
-            filtered_rows = df_filtered.count()
-            dropped_rows = total_rows - filtered_rows
-            if dropped_rows > 0:
-                logger.info(f"Dropped {dropped_rows} rows from announcements due to nulls in NOT NULL columns")
-            else:
-                logger.info("No rows dropped from announcements due to nulls")
-            
-            dynamic_frame = DynamicFrame.fromDF(df_filtered, glueContext, "announcements_frame")
-        else:
-            dynamic_frame = glueContext.create_dynamic_frame.from_options(
-                connection_type="s3",
-                connection_options={"paths": [folder_path], "recurse": True},
-                format="csv",
-                format_options={
-                    "withHeader": True,
-                    "separator": ",",
-                    "quoteChar": '"',
-                    "escapeChar": "\\"
-                }
-            )
-        
-        logger.info(f"Loaded {dynamic_frame.count()} records from {folder}")
-        df = dynamic_frame.toDF()
-        logger.info(f"Schema for {folder}:")
-        df.printSchema()
-        logger.info(f"Sample Data from {folder} (showing 5 rows):")
-        df.show(5, truncate=False)
+## Write to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(csv_df, glueContext, "redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_table,
+        "database": redshift_database
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
 
-        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-        logger.info(f"Executing truncate query: {truncate_query}")
-
-        glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame,
-            catalog_connection=redshift_connection,
-            connection_options={
-                "dbtable": f"{redshift_schema}.{redshift_table}",
-                "database": redshift_database,
-                "preactions": truncate_query
-            },
-            redshift_tmp_dir=redshift_temp_dir
-        )
-        logger.info(f"Successfully loaded data into {redshift_schema}.{redshift_table}")
-
-    except Exception as e:
-        logger.error(f"Failed processing folder {folder}: {str(e)}", exc_info=True)
-        raise
-
-# Commit Job
-logger.info("All folders processed successfully")
+## Commit the job
 job.commit()
-logger.info("Job committed successfully")

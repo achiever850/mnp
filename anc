@@ -27,9 +27,9 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema for office
+## Define schema for office (corrected 'tennantId' to 'tenantId')
 office_schema = StructType([
-    StructField("tennantId", IntegerType(), False),
+    StructField("tenantId", IntegerType(), False),  # Changed from "tennantId"
     StructField("officeId", LongType(), False),
     StructField("officeName", StringType(), True),
     StructField("officeCode", StringType(), True),
@@ -48,15 +48,15 @@ office_schema = StructType([
     StructField("dwlastmodifiedDateTime", StringType(), True)
 ])
 
-## Define schema for organization
+## Define schema for organization (unchanged)
 org_schema = StructType([
     StructField("tenantID", IntegerType(), False),
     StructField("orgId", IntegerType(), False),
-    StructField("tenantName", StringType(), True),    # varchar(100)
-    StructField("tenantcode", StringType(), True),     # varchar(50)
-    StructField("organizationName", StringType(), True),  # varchar(100)
-    StructField("organizationCode", StringType(), True),  # varchar(20)
-    StructField("dwlastModifieddatetime", StringType(), True)  # Will be converted to datetime
+    StructField("tenantName", StringType(), True),
+    StructField("tenantcode", StringType(), True),
+    StructField("organizationName", StringType(), True),
+    StructField("organizationCode", StringType(), True),
+    StructField("dwlastModifieddatetime", StringType(), True)
 ])
 
 ## Process Office Data
@@ -74,10 +74,10 @@ if office_raw_count > 0:
 else:
     print("No office data loaded from S3. Check path or CSV files.")
 
-# Filter and transform office data
-office_filtered_df = office_df.filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
+# Filter and transform office data (corrected 'tennantId' to 'tenantId')
+office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
     .select(
-        col("tennantId"),
+        col("tenantId"),  # Changed from "tennantId"
         col("officeId"),
         col("officeName"),
         col("officeCode"),
@@ -102,7 +102,7 @@ print(f"Loaded {office_filtered_count} rows for office after filtering")
 if office_filtered_count > 0:
     office_filtered_df.show(5)
 else:
-    print("No office data remains after filtering. Check tennantId/officeId for nulls.")
+    print("No office data remains after filtering. Check tenantId/officeId for nulls.")
 
 ## Process Organization Data
 # Read organization data

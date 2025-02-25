@@ -6,17 +6,19 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
-from pyspark.sql.types import StructType, StructField, IntegerType, StringType
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
+s3_office_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+s3_org_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_table = "usastaffing_staging.organization"
+redshift_office_table = "usastaffing_staging.office"
+redshift_org_table = "usastaffing_staging.organization"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -25,8 +27,29 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema based on Redshift DDL
-schema = StructType([
+## Define schema for office
+office_schema = StructType([
+    StructField("tennantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
+## Define schema for organization
+org_schema = StructType([
     StructField("tenantID", IntegerType(), False),
     StructField("orgId", IntegerType(), False),
     StructField("tenantName", StringType(), True),    # varchar(100)
@@ -36,12 +59,68 @@ schema = StructType([
     StructField("dwlastModifieddatetime", StringType(), True)  # Will be converted to datetime
 ])
 
-## Read, filter, and transform data
-df = spark.read.option("header", "true") \
+## Process Office Data
+# Read office data
+office_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
-    .schema(schema) \
-    .csv(s3_input_path) \
-    .filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
+    .schema(office_schema) \
+    .csv(s3_office_input_path)
+
+# Debugging: Check raw office data
+office_raw_count = office_df.count()
+print(f"Loaded {office_raw_count} raw rows for office from S3")
+if office_raw_count > 0:
+    office_df.show(5)
+else:
+    print("No office data loaded from S3. Check path or CSV files.")
+
+# Filter and transform office data
+office_filtered_df = office_df.filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .select(
+        col("tennantId"),
+        col("officeId"),
+        col("officeName"),
+        col("officeCode"),
+        col("externalName"),
+        col("addressline1"),
+        col("addressline2"),
+        col("addressline3"),
+        col("city"),
+        col("zipcode"),
+        col("state"),
+        col("stateabbrevation"),
+        col("country"),
+        col("countryAbbrevation"),
+        col("phonenumber"),
+        col("faxnumber"),
+        to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastmodifiedDateTime")
+    )
+
+# Debugging: Check filtered office data
+office_filtered_count = office_filtered_df.count()
+print(f"Loaded {office_filtered_count} rows for office after filtering")
+if office_filtered_count > 0:
+    office_filtered_df.show(5)
+else:
+    print("No office data remains after filtering. Check tennantId/officeId for nulls.")
+
+## Process Organization Data
+# Read organization data
+org_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(org_schema) \
+    .csv(s3_org_input_path)
+
+# Debugging: Check raw organization data
+org_raw_count = org_df.count()
+print(f"Loaded {org_raw_count} raw rows for organization from S3")
+if org_raw_count > 0:
+    org_df.show(5)
+else:
+    print("No organization data loaded from S3. Check path or CSV files.")
+
+# Filter and transform organization data
+org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
     .select(
         col("tenantID"),
         col("orgId"),
@@ -52,14 +131,35 @@ df = spark.read.option("header", "true") \
         to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastModifieddatetime")
     )
 
-## Write to Redshift with truncate
+# Debugging: Check filtered organization data
+org_filtered_count = org_filtered_df.count()
+print(f"Loaded {org_filtered_count} rows for organization after filtering")
+if org_filtered_count > 0:
+    org_filtered_df.show(5)
+else:
+    print("No organization data remains after filtering. Check tenantID/orgId for nulls.")
+
+## Write to Redshift
+# Write office data
 glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    frame=DynamicFrame.fromDF(office_filtered_df, glueContext, "office_redshift_frame"),
     catalog_connection=redshift_connection,
     connection_options={
-        "dbtable": redshift_table,
+        "dbtable": redshift_office_table,
         "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_table}"
+        "preactions": f"TRUNCATE TABLE {redshift_office_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+# Write organization data
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(org_filtered_df, glueContext, "org_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_org_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_org_table}"
     },
     redshift_tmp_dir=redshift_temp_dir
 )

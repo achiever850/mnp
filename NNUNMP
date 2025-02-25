@@ -5,14 +5,14 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, TimestampType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-
 job_name = args['JOB_NAME']
 
 ## Hardcoded configurations
-s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
@@ -25,29 +25,51 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(job_name, args)
 
-## Read CSV from S3 (assumes CSV files in the folder have headers)
+## Define the schema manually based on the Redshift table
+schema = StructType([
+    StructField("tennantId", IntegerType(), False),           # int NOT NULL
+    StructField("officeId", LongType(), False),              # bigint NOT NULL
+    StructField("officeName", StringType(), True),           # varchar(100)
+    StructField("officeCode", StringType(), True),           # varchar(10)
+    StructField("externalName", StringType(), True),         # varchar(50)
+    StructField("addressline1", StringType(), True),         # varchar(100)
+    StructField("addressline2", StringType(), True),         # varchar(100)
+    StructField("addressline3", StringType(), True),         # varchar(100)
+    StructField("city", StringType(), True),                 # varchar(100)
+    StructField("zipcode", StringType(), True),              # varchar(50)
+    StructField("state", StringType(), True),                # varchar(50)
+    StructField("stateabbrevation", StringType(), True),     # varchar(5)
+    StructField("country", StringType(), True),              # varchar(100)
+    StructField("countryAbbrevation", StringType(), True),   # char(5)
+    StructField("phonenumber", StringType(), True),          # varchar(50)
+    StructField("faxnumber", StringType(), True),            # varchar(50)
+    StructField("dwlastmodifiedDateTime", StringType(), True) # datetime (read as string, convert later)
+])
+
+## Read CSV from S3 with the manual schema
 csv_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
+    .schema(schema) \
     .csv(s3_input_path)
 
-## Map and cast columns to match Redshift table schema
+## Map and cast columns (convert dwlastmodifiedDateTime to timestamp)
 csv_df = csv_df.select(
-    col("tennantId").cast("integer").alias("tennantId"),
-    col("officeId").cast("bigint").alias("officeId"),
-    col("officeName").cast("string").alias("officeName"),
-    col("officeCode").cast("string").alias("officeCode"),
-    col("externalName").cast("string").alias("externalName"),
-    col("addressline1").cast("string").alias("addressline1"),
-    col("addressline2").cast("string").alias("addressline2"),
-    col("addressline3").cast("string").alias("addressline3"),
-    col("city").cast("string").alias("city"),
-    col("zipcode").cast("string").alias("zipcode"),
-    col("state").cast("string").alias("state"),
-    col("stateabbrevation").cast("string").alias("stateabbrevation"),
-    col("country").cast("string").alias("country"),
-    col("countryAbbrevation").cast("string").alias("countryAbbrevation"),
-    col("phonenumber").cast("string").alias("phonenumber"),
-    col("faxnumber").cast("string").alias("faxnumber"),
+    col("tennantId").alias("tennantId"),
+    col("officeId").alias("officeId"),
+    col("officeName").alias("officeName"),
+    col("officeCode").alias("officeCode"),
+    col("externalName").alias("externalName"),
+    col("addressline1").alias("addressline1"),
+    col("addressline2").alias("addressline2"),
+    col("addressline3").alias("addressline3"),
+    col("city").alias("city"),
+    col("zipcode").alias("zipcode"),
+    col("state").alias("state"),
+    col("stateabbrevation").alias("stateabbrevation"),
+    col("country").alias("country"),
+    col("countryAbbrevation").alias("countryAbbrevation"),
+    col("phonenumber").alias("phonenumber"),
+    col("faxnumber").alias("faxnumber"),
     to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd HH:mm:ss").alias("dwlastmodifiedDateTime")
 )
 

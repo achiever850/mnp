@@ -27,7 +27,7 @@ job.init(args['JOB_NAME'], args)
 
 ## Define schema
 schema = StructType([
-    StructField("tennantId", IntegerType(), False),
+    StructField("tenantId", IntegerType(), False),
     StructField("officeId", LongType(), False),
     StructField("officeName", StringType(), True),
     StructField("officeCode", StringType(), True),
@@ -53,7 +53,7 @@ df = spark.read.option("header", "true") \
     .csv(s3_input_path) \
     .filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
     .select(
-        col("tennantId"),
+        col("tenantId"),
         col("officeId"),
         col("officeName"),
         col("officeCode"),

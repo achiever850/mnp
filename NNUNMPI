@@ -1,89 +1,88 @@
 import sys
+from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
 
-## @params: [JOB_NAME]
+## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
+## Configurations
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_table = "usastaffing_staging.office"
+
+## Initialize contexts
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-# Read data from S3
-datasource0 = glueContext.create_dynamic_frame.from_options(
-    format_options={'withHeader': True, 'separator': ','},
-    connection_type="s3",
-    format="csv",
+## Define schema
+schema = StructType([
+    StructField("tennantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbrevation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbrevation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
+## Read, filter, and transform data
+df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(schema) \
+    .csv(s3_input_path) \
+    .filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .select(
+        col("tennantId"),
+        col("officeId"),
+        col("officeName"),
+        col("officeCode"),
+        col("externalName"),
+        col("addressline1"),
+        col("addressline2"),
+        col("addressline3"),
+        col("city"),
+        col("zipcode"),
+        col("state"),
+        col("stateabbrevation"),
+        col("country"),
+        col("countryAbbrevation"),
+        col("phonenumber"),
+        col("faxnumber"),
+        to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastmodifiedDateTime")
+    )
+
+## Write to Redshift with truncate
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    catalog_connection=redshift_connection,
     connection_options={
-        "paths": ["s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements"],
-        "recurse": True
+        "dbtable": redshift_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_table}"
     },
-    transformation_ctx="datasource0"
+    redshift_tmp_dir=redshift_temp_dir
 )
 
-# Convert DynamicFrame to DataFrame for easier manipulation
-df = datasource0.toDF()
-
-# Perform necessary transformations to match Redshift table structure
-df = df.withColumnRenamed("announcement Id", "announcementId") \
-       .withColumnRenamed("announcement status", "announcementStatus") \
-       .withColumnRenamed("announcementTemplate", "announcementTemplate") \
-       .withColumnRenamed("salaryType", "salaryType") \
-       .withColumnRenamed("minimumSalary", "minimumSalary") \
-       .withColumnRenamed("maximumSalary", "maximumSalary") \
-       .withColumnRenamed("notToExceed", "notToExceed") \
-       .withColumnRenamed("totalOpenings", "totalOpenings") \
-       .withColumnRenamed("openDate", "openDate") \
-       .withColumnRenamed("closeDate", "closeDate") \
-       .withColumnRenamed("releasedFlag", "releasedFlag") \
-       .withColumnRenamed("releaseddatetime", "releasedDateTime") \
-       .withColumnRenamed("applicationLimitSetFlag", "applicationLimitSetFlag") \
-       .withColumnRenamed("applicationLimit", "applicationLimit") \
-       .withColumnRenamed("displayDefaultBenefitsTextFlag", "displayDefaultBenefitsTextFlag") \
-       .withColumnRenamed("externalContactId", "externalContactId") \
-       .withColumnRenamed("externalContactName", "externalContactName") \
-       .withColumnRenamed("externalContactEmail", "externalContactEmail") \
-       .withColumnRenamed("internalContactId", "internalContactId") \
-       .withColumnRenamed("internalContactName", "internalContactName") \
-       .withColumnRenamed("internalContactEmail", "internalContactEmail") \
-       .withColumnRenamed("usajobsControlNumber", "usajobsControlNumber") \
-       .withColumnRenamed("linkedUSAJOBSCONTROLNUMBER", "linkedUsaJobsControlNumber") \
-       .withColumnRenamed("WhoMayApply", "whoMayApply") \
-       .withColumnRenamed("whoMayApplyOverrideText", "whoMayApplyOverrideText") \
-       .withColumnRenamed("promotionpotential", "promotionPotential") \
-       .withColumnRenamed("usajobstatus", "usajobStatus") \
-       .withColumnRenamed("lastmodifieddatetime", "lastModifiedDateTime") \
-       .withColumnRenamed("dwLastModifieddatetime", "dwLastModifiedDateTime")
-
-# Convert string columns to appropriate types with updated format for lastModifiedDateTime
-df = df.withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd HH:mm:ss"))
-df = df.withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd HH:mm:ss"))
-df = df.withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd HH:mm:ss"))
-df = df.withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SS"))
-df = df.withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SS"))
-
-# Convert boolean strings to actual boolean values
-df = df.withColumn("releasedFlag", col("releasedFlag") == "true")
-df = df.withColumn("applicationLimitSetFlag", col("applicationLimitSetFlag") == "true")
-df = df.withColumn("displayDefaultBenefitsTextFlag", col("displayDefaultBenefitsTextFlag") == "true")
-
-# Convert string to int for NOT NULL columns
-df = df.withColumn("tennantid", col("tennantid").cast("int"))
-df = df.withColumn("announcementId", col("announcementId").cast("bigint"))
-
-# Write to Redshift
-df.write \
-  .format("jdbc") \
-  .option("url", "jdbc:redshift://<your-cluster-endpoint>:5439/hcd-dev-db?user=<username>&password=<password>") \
-  .option("dbtable", "usastaffing_staging.announcement") \
-  .option("tempdir", "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/") \
-  .mode("append") \
-  .save()
-
+## Commit the job
 job.commit()

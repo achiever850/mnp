@@ -14,11 +14,13 @@ args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 ## Configurations
 s3_office_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
 s3_org_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
+s3_customer_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/customers/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_office_table = "usastaffing_staging.office"
 redshift_org_table = "usastaffing_staging.organization"
+redshift_customer_table = "usastaffing_staging.customer"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -40,9 +42,9 @@ office_schema = StructType([
     StructField("city", StringType(), True),
     StructField("zipcode", StringType(), True),
     StructField("state", StringType(), True),
-    StructField("stateabbreviation", StringType(), True),  # Updated here
+    StructField("stateabbreviation", StringType(), True),
     StructField("country", StringType(), True),
-    StructField("countryAbbreviation", StringType(), True),  # Updated here
+    StructField("countryAbbreviation", StringType(), True),
     StructField("phonenumber", StringType(), True),
     StructField("faxnumber", StringType(), True),
     StructField("dwlastmodifiedDateTime", StringType(), True)
@@ -59,17 +61,40 @@ org_schema = StructType([
     StructField("dwlastModifieddatetime", StringType(), True)
 ])
 
+## Define schema for customers
+customer_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("customerID", LongType(), False),
+    StructField("customerName", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("agencycode", StringType(), True),
+    StructField("agencyName", StringType(), True),
+    StructField("agencyReferenceCode", StringType(), True),
+    StructField("departmentCode", StringType(), True),
+    StructField("departmentName", StringType(), True),
+    StructField("addressLine1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("ZipCode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateAbbreviation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbreviation", StringType(), True),
+    StructField("phoneNumber", StringType(), True),
+    StructField("faxNumber", StringType(), True),
+    StructField("opfInstance", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
 ## Read and process office data
 office_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
     .schema(office_schema) \
     .csv(s3_office_input_path)
 
-# Parse the dwlastmodifiedDateTime column from the original string format and convert it to timestamp
 office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
-    .withColumn(
-        "dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")
-    )
+    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
 
 ## Read and process organization data
 org_df = spark.read.option("header", "true") \
@@ -77,11 +102,17 @@ org_df = spark.read.option("header", "true") \
     .schema(org_schema) \
     .csv(s3_org_input_path)
 
-# Parse the dwlastModifieddatetime column from the original string format and convert it to timestamp
 org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
-    .withColumn(
-        "dwlastModifieddatetime", to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")
-    )
+    .withColumn("dwlastModifieddatetime", to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+
+## Read and process customer data
+customer_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(customer_schema) \
+    .csv(s3_customer_input_path)
+
+customer_filtered_df = customer_df.filter((col("tenantId").isNotNull()) & (col("customerID").isNotNull())) \
+    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
 
 ## Write office data to Redshift
 glueContext.write_dynamic_frame.from_jdbc_conf(
@@ -90,7 +121,7 @@ glueContext.write_dynamic_frame.from_jdbc_conf(
     connection_options={
         "dbtable": redshift_office_table,
         "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_office_table}"  # Ensure the table is truncated before loading
+        "preactions": f"TRUNCATE TABLE {redshift_office_table}"
     },
     redshift_tmp_dir=redshift_temp_dir
 )
@@ -102,7 +133,19 @@ glueContext.write_dynamic_frame.from_jdbc_conf(
     connection_options={
         "dbtable": redshift_org_table,
         "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_org_table}"  # Ensure the table is truncated before loading
+        "preactions": f"TRUNCATE TABLE {redshift_org_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Write customer data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(customer_filtered_df, glueContext, "customer_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_customer_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_customer_table}"
     },
     redshift_tmp_dir=redshift_temp_dir
 )

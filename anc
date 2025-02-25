@@ -6,17 +6,17 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
-from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, FloatType, BooleanType
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_announcements_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
+s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_table = "usastaffing_staging.announcement"
+redshift_table = "usastaffing_staging.organization"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -25,84 +25,31 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Schema for announcements table
+## Define schema based on Redshift DDL
 schema = StructType([
-    StructField("tenantid", IntegerType(), False),
-    StructField("announcementId", LongType(), False),
-    StructField("announcementNumber", StringType(), False),
-    StructField("announcement_status", StringType(), True),
-    StructField("announcementTemplate", StringType(), True),
-    StructField("salaryType", StringType(), True),
-    StructField("minimumSalary", FloatType(), True),
-    StructField("maximumSalary", FloatType(), True),
-    StructField("notToExceed", StringType(), True),
-    StructField("totalOpenings", StringType(), True),
-    StructField("openDate", StringType(), True),
-    StructField("closeDate", StringType(), True),
-    StructField("releasedFlag", BooleanType(), True),
-    StructField("releaseddatetime", StringType(), True),
-    StructField("applicationLimitSetFlag", BooleanType(), True),
-    StructField("applicationLimit", IntegerType(), True),
-    StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
-    StructField("externalContactId", LongType(), True),
-    StructField("externalContactName", StringType(), True),
-    StructField("externalContactEmail", StringType(), True),
-    StructField("internalContactId", LongType(), True),
-    StructField("internalContactName", StringType(), True),
-    StructField("internalContactEmail", StringType(), True),
-    StructField("usajobsControlNumber", LongType(), True),
-    StructField("linkedUSAJOBSCONTROLNUMBER", StringType(), True),
-    StructField("WhoMayApply", StringType(), True),
-    StructField("whoMayApplyOverrideText", StringType(), True),
-    StructField("promotionpotential", StringType(), True),
-    StructField("usajobstatus", StringType(), True),
-    StructField("lastmodifieddatetime", StringType(), True),
-    StructField("dwLastModifieddatetime", StringType(), True)
+    StructField("tenantID", IntegerType(), False),
+    StructField("orgId", IntegerType(), False),
+    StructField("tenantName", StringType(), True),    # varchar(100)
+    StructField("tenantcode", StringType(), True),     # varchar(50)
+    StructField("organizationName", StringType(), True),  # varchar(100)
+    StructField("organizationCode", StringType(), True),  # varchar(20)
+    StructField("dwlastModifieddatetime", StringType(), True)  # Will be converted to datetime
 ])
 
-## Read, filter, and transform announcements data
+## Read, filter, and transform data
 df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
     .schema(schema) \
-    .csv(s3_announcements_path) \
-    .filter(
-        (col("tenantid") == 8) & 
-        (col("tenantid").isNotNull()) & 
-        (col("announcementId").isNotNull()) & 
-        (col("announcementNumber").isNotNull())
-    ) \
+    .csv(s3_input_path) \
+    .filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
     .select(
-        col("tenantid"),
-        col("announcementId"),
-        col("announcementNumber"),
-        col("announcement_status"),
-        col("announcementTemplate"),
-        col("salaryType"),
-        col("minimumSalary"),
-        col("maximumSalary"),
-        col("notToExceed"),
-        col("totalOpenings"),
-        to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("openDate"),
-        to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("closeDate"),
-        col("releasedFlag"),
-        to_timestamp(col("releaseddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("releaseddatetime"),
-        col("applicationLimitSetFlag"),
-        col("applicationLimit"),
-        col("displayDefaultBenefitsTextFlag"),
-        col("externalContactId"),
-        col("externalContactName"),
-        col("externalContactEmail"),
-        col("internalContactId"),
-        col("internalContactName"),
-        col("internalContactEmail"),
-        col("usajobsControlNumber"),
-        col("linkedUSAJOBSCONTROLNUMBER"),
-        col("WhoMayApply"),
-        col("whoMayApplyOverrideText"),
-        col("promotionpotential"),
-        col("usajobstatus"),
-        to_timestamp(col("lastmodifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("lastmodifieddatetime"),
-        to_timestamp(col("dwLastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwLastModifieddatetime")
+        col("tenantID"),
+        col("orgId"),
+        col("tenantName"),
+        col("tenantcode"),
+        col("organizationName"),
+        col("organizationCode"),
+        to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastModifieddatetime")
     )
 
 ## Write to Redshift with truncate

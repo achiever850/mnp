@@ -6,7 +6,7 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
-from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
@@ -25,25 +25,25 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema
+## Define schema strictly matching Redshift DDL
 schema = StructType([
     StructField("tenantId", IntegerType(), False),
-    StructField("officeId", LongType(), False),
+    StructField("officeId", IntegerType(), False),
     StructField("officeName", StringType(), True),
     StructField("officeCode", StringType(), True),
     StructField("externalName", StringType(), True),
-    StructField("addressline1", StringType(), True),
-    StructField("addressline2", StringType(), True),
-    StructField("addressline3", StringType(), True),
+    StructField("addressLine1", StringType(), True),
+    StructField("addressLine2", StringType(), True),
+    StructField("addressLine3", StringType(), True),
     StructField("city", StringType(), True),
-    StructField("zipcode", StringType(), True),
+    StructField("zipCode", StringType(), True),
     StructField("state", StringType(), True),
-    StructField("stateabbrevation", StringType(), True),
+    StructField("stateAbbreviation", StringType(), True),
     StructField("country", StringType(), True),
-    StructField("countryAbbrevation", StringType(), True),
-    StructField("phonenumber", StringType(), True),
-    StructField("faxnumber", StringType(), True),
-    StructField("dwlastmodifiedDateTime", StringType(), True)
+    StructField("countryAbbreviation", StringType(), True),
+    StructField("phoneNumber", StringType(), True),
+    StructField("faxNumber", StringType(), True),
+    StructField("dwLastModifiedDateTime", StringType(), True)
 ])
 
 ## Read, filter, and transform data
@@ -58,18 +58,18 @@ df = spark.read.option("header", "true") \
         col("officeName"),
         col("officeCode"),
         col("externalName"),
-        col("addressline1"),
-        col("addressline2"),
-        col("addressline3"),
+        col("addressLine1"),
+        col("addressLine2"),
+        col("addressLine3"),
         col("city"),
-        col("zipcode"),
+        col("zipCode"),
         col("state"),
-        col("stateabbrevation"),
+        col("stateAbbreviation"),
         col("country"),
-        col("countryAbbrevation"),
-        col("phonenumber"),
-        col("faxnumber"),
-        to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastmodifiedDateTime")
+        col("countryAbbreviation"),
+        col("phoneNumber"),
+        col("faxNumber"),
+        to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX").alias("dwLastModifiedDateTime")
     )
 
 ## Write to Redshift with truncate

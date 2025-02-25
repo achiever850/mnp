@@ -160,4 +160,26 @@ glueContext.write_dynamic_frame.from_jdbc_conf(
 # Write Customer data to Redshift
 glueContext.write_dynamic_frame.from_jdbc_conf(
     frame=DynamicFrame.fromDF(customer_df, glueContext, "customer_redshift_frame"),
-    catalog_connection=redshift_connection
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_customer_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_customer_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+# Write Certificate data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(certificate_df, glueContext, "certificate_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_certificate_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_certificate_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Commit job
+job.commit()

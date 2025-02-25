@@ -51,7 +51,7 @@ df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
     .schema(schema) \
     .csv(s3_input_path) \
-    .filter((col("tennantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
     .select(
         col("tenantId"),
         col("officeId"),

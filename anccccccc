@@ -25,7 +25,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define certificate schema (aligned with Redshift, using TimestampType)
+## Define certificate schema (aligned with Redshift)
 certificate_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("rankingListId", IntegerType(), False),
@@ -112,14 +112,15 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                     for field in certificate_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Write to Redshift
+        # Write to Redshift without auto-creation
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
             connection_options={
                 "dbtable": table_name,
                 "database": redshift_database,
-                "preactions": f"TRUNCATE TABLE {table_name}"
+                "preactions": f"TRUNCATE TABLE {table_name}",
+                "createTableIfNotExists": "false"  # Disable dynamic table creation
             },
             redshift_tmp_dir=temp_dir
         )

@@ -1,4 +1,5 @@
 import sys
+import time
 from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
@@ -8,24 +9,24 @@ from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, FloatType
 
-## Get job parameters
+# Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
-## Configurations
+# Configurations
 s3_announcement_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_announcement_table = "usastaffing_staging.announcement"
 
-## Initialize contexts
+# Initialize contexts
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema for announcements
+# Define schema for announcements
 announcement_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("announcementId", LongType(), False),
@@ -62,7 +63,7 @@ announcement_schema = StructType([
     StructField("dwlastmodifiedDateTime", StringType(), True)
 ])
 
-## Read and process announcement data
+# Read and process announcement data
 announcement_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
     .schema(announcement_schema) \
@@ -89,48 +90,34 @@ announcement_filtered_df.show(5, truncate=False)
 row_count = announcement_filtered_df.count()
 print(f"Number of rows to write: {row_count}")
 
-## Convert to DynamicFrame
+# Convert to DynamicFrame
 announcement_dynamic_frame = DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame")
 
-# Workaround for applying limit: Convert DynamicFrame to DataFrame, apply limit, and then convert back
-announcement_sample_df = announcement_filtered_df.limit(10)
-announcement_sample_dynamic_frame = DynamicFrame.fromDF(announcement_sample_df, glueContext, "announcement_sample_frame")
+# Retry Logic for Redshift Write with improved error handling
+retries = 3
+for attempt in range(retries):
+    try:
+        print(f"Attempt {attempt + 1}: Writing data to Redshift...")
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=announcement_dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": redshift_announcement_table,
+                "database": redshift_database
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+        print("Successfully wrote data to Redshift.")
+        break  # Exit the loop if successful
+    except Exception as e:
+        print(f"Error on attempt {attempt + 1}: {str(e)}")
+        if attempt < retries - 1:
+            print("Retrying...")
+            time.sleep(30)  # Adding a small delay before retrying
+        else:
+            print("Failed to write to Redshift after multiple attempts. Exiting.")
+            raise
 
-# Test writing a small subset (first 10 rows) to Redshift for connection testing
-try:
-    print("Writing a small sample of data to Redshift for connection testing...")
-    
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=announcement_sample_dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": redshift_announcement_table,
-            "database": redshift_database
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
-    print("Successfully wrote a small sample to Redshift.")
-except Exception as e:
-    print(f"Error during sample write: {str(e)}")
-    raise
-
-## Write full data to Redshift with error handling
-try:
-    print("Writing full data to Redshift...")
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=announcement_dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": redshift_announcement_table,
-            "database": redshift_database
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
-    print("Successfully wrote data to Redshift.")
-except Exception as e:
-    print(f"Error writing to Redshift: {str(e)}")
-    raise
-
-## Commit the job
+# Commit the job
 job.commit()
 print("Job completed successfully")

@@ -25,16 +25,16 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema for announcements (aligned with Redshift DDL)
+## Define schema for announcements
 announcement_schema = StructType([
     StructField("tenantId", IntegerType(), False),
-    StructField("announcementId", LongType(), False),  # bigint
+    StructField("announcementId", LongType(), False),
     StructField("announcementNumber", StringType(), False),
     StructField("announcementStatus", StringType(), True),
     StructField("announcementTemplate", StringType(), True),
     StructField("salaryType", StringType(), True),
-    StructField("minimumSalary", FloatType(), True),  # real
-    StructField("maximumSalary", FloatType(), True),  # real
+    StructField("minimumSalary", FloatType(), True),
+    StructField("maximumSalary", FloatType(), True),
     StructField("notToExceed", StringType(), True),
     StructField("totalOpenings", StringType(), True),
     StructField("openDate", StringType(), True),
@@ -44,13 +44,13 @@ announcement_schema = StructType([
     StructField("applicationLimitSetFlag", BooleanType(), True),
     StructField("applicationLimit", IntegerType(), True),
     StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
-    StructField("externalContactId", LongType(), True),  # bigint
+    StructField("externalContactId", LongType(), True),
     StructField("externalContactName", StringType(), True),
     StructField("externalContactEmail", StringType(), True),
-    StructField("internalContactId", LongType(), True),  # bigint
+    StructField("internalContactId", LongType(), True),
     StructField("internalContactName", StringType(), True),
     StructField("internalContactEmail", StringType(), True),
-    StructField("usajobsControlNumber", LongType(), True),  # bigint
+    StructField("usajobsControlNumber", LongType(), True),
     StructField("linkedUSAJOBSControlNumber", StringType(), True),
     StructField("whoMayApply", StringType(), True),
     StructField("whoMayApplyOverrideText", StringType(), True),
@@ -59,7 +59,7 @@ announcement_schema = StructType([
     StructField("promotionPotential", StringType(), True),
     StructField("usajobsJobStatus", StringType(), True),
     StructField("lastModifiedDateTime", StringType(), True),
-    StructField("dwLastModifiedDateTime", StringType(), True)
+    StructField("dwlastmodifiedDateTime", StringType(), True)
 ])
 
 ## Read and process announcement data
@@ -75,11 +75,11 @@ print("Sample raw data:")
 announcement_df.show(5, truncate=False)
 
 announcement_filtered_df = announcement_df.filter((col("tenantId").isNotNull()) & (col("announcementId").isNotNull()) & (col("announcementNumber").isNotNull())) \
-    .withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
-    .withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
-    .withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
-    .withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
-    .withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"))
+    .withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")) \
+    .withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")) \
+    .withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")) \
+    .withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS")) \
+    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
 
 # Debug: Check filtered data and row count
 print("Filtered DataFrame Schema:")

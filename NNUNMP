@@ -89,19 +89,43 @@ announcement_filtered_df.show(5, truncate=False)
 row_count = announcement_filtered_df.count()
 print(f"Number of rows to write: {row_count}")
 
-## Write announcement data to Redshift with error handling
+## Test writing a small subset of data to Redshift first
 try:
+    # Convert to DynamicFrame
+    announcement_dynamic_frame = DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame")
+    
+    # Write a small sample (first 10 rows) to test the Redshift connection
+    sample_dynamic_frame = announcement_dynamic_frame.limit(10)
+    
+    print("Writing a small sample of data to Redshift for connection testing...")
+    
     glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame"),
+        frame=sample_dynamic_frame,
         catalog_connection=redshift_connection,
         connection_options={
             "dbtable": redshift_announcement_table,
-            "database": redshift_database,
-            "preactions": f"TRUNCATE TABLE {redshift_announcement_table}"
+            "database": redshift_database
         },
         redshift_tmp_dir=redshift_temp_dir
     )
-    print("Successfully wrote data to Redshift")
+    print("Successfully wrote a small sample to Redshift.")
+except Exception as e:
+    print(f"Error during sample write: {str(e)}")
+    raise
+
+## Write announcement data to Redshift with error handling
+try:
+    print("Writing full data to Redshift...")
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=announcement_dynamic_frame,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": redshift_announcement_table,
+            "database": redshift_database
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print("Successfully wrote data to Redshift.")
 except Exception as e:
     print(f"Error writing to Redshift: {str(e)}")
     raise

@@ -6,7 +6,7 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp, when
-from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, FloatType, TimestampType
+from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, StringType, BooleanType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
@@ -28,7 +28,7 @@ job.init(args['JOB_NAME'], args)
 ## Define certificate schema (aligned with Redshift)
 certificate_schema = StructType([
     StructField("tenantId", IntegerType(), False),
-    StructField("rankingListId", IntegerType(), False),  # Changed from LongType to match INT
+    StructField("rankingListId", IntegerType(), False),
     StructField("certificateNumber", StringType(), True),
     StructField("certificateType", StringType(), True),
     StructField("certificateStatus", StringType(), True),
@@ -38,27 +38,27 @@ certificate_schema = StructType([
     StructField("signedDateTime", StringType(), True),
     StructField("issueDateTime", StringType(), True),
     StructField("issuer", StringType(), True),
-    StructField("certificateAuditedFlag", BooleanType(), True),  # Changed to BooleanType
+    StructField("certificateAuditedFlag", BooleanType(), True),
     StructField("initialAuditCompleteDateTime", StringType(), True),
     StructField("finalAuditCompleteDateTime", StringType(), True),
     StructField("auditedBy", StringType(), True),
     StructField("referMethod", StringType(), True),
-    StructField("referMethodNumber", FloatType(), True),  # Changed to FloatType to match REAL
-    StructField("certificateAmendedFlag", BooleanType(), True),  # Changed to BooleanType
-    StructField("certificateCancelledFlag", BooleanType(), True),  # Changed to BooleanType
-    StructField("certificateExpiredFlag", BooleanType(), True),  # Changed to BooleanType
+    StructField("referMethodNumber", FloatType(), True),
+    StructField("certificateAmendedFlag", BooleanType(), True),
+    StructField("certificateCancelledFlag", BooleanType(), True),
+    StructField("certificateExpiredFlag", BooleanType(), True),
     StructField("certificateExpirationDate", StringType(), True),
-    StructField("ctapictapWellQualifiedScore", FloatType(), True),  # Changed to FloatType to match REAL
+    StructField("ctapictapWellQualifiedScore", FloatType(), True),
     StructField("rankBy", StringType(), True),
     StructField("tieBreaker", StringType(), True),
-    StructField("candidateInventoryEnabledFlag", BooleanType(), True),  # Changed to BooleanType
+    StructField("candidateInventoryEnabledFlag", BooleanType(), True),
     StructField("candidateInventoryStartDate", StringType(), True),
     StructField("candidateInventoryEndDate", StringType(), True),
     StructField("lastModifiedDateTime", StringType(), True),
     StructField("dwLastModifiedDateTime", StringType(), True)
 ])
 
-## Process data function
+## Process data function with simplified filter and extra debugging
 def process_data(input_path, schema, table_name, key_columns, timestamp_columns, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -67,17 +67,27 @@ def process_data(input_path, schema, table_name, key_columns, timestamp_columns,
             .schema(schema) \
             .csv(input_path)
         
-        # Debug: Show schema and sample data
+        # Debug: Verify DataFrame is not empty and schema matches
         print(f"Schema for {table_name}:")
         df.printSchema()
-        print(f"Sample data for {table_name}:")
+        print(f"Sample data for {table_name} (raw):")
         df.show(5, truncate=False)
+        print(f"Row count before filter: {df.count()}")
 
-        # Dynamic filter based on key columns
-        filter_condition = True
-        for key in key_columns:
-            filter_condition = filter_condition & col(key).isNotNull()
-        filtered_df = df.filter(filter_condition)
+        # Check if key columns exist
+        missing_cols = [key for key in key_columns if key not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Key columns not found in DataFrame: {missing_cols}")
+
+        # Simplified explicit filter (avoid dynamic chaining)
+        filtered_df = df.filter(
+            col("tenantId").isNotNull() & col("rankingListId").isNotNull()
+        )
+
+        # Debug: Check filtered data
+        print(f"Sample data after filter for {table_name}:")
+        filtered_df.show(5, truncate=False)
+        print(f"Row count after filter: {filtered_df.count()}")
 
         # Transform timestamp columns
         for ts_col in timestamp_columns:
@@ -90,6 +100,10 @@ def process_data(input_path, schema, table_name, key_columns, timestamp_columns,
             filtered_df = filtered_df.withColumn(b_col, when(col(b_col) == "true", True)
                                                 .when(col(b_col) == "false", False)
                                                 .otherwise(None).cast(BooleanType()))
+
+        # Debug: Final transformed data
+        print(f"Sample data after transformations for {table_name}:")
+        filtered_df.show(5, truncate=False)
 
         # Convert to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
@@ -109,6 +123,7 @@ def process_data(input_path, schema, table_name, key_columns, timestamp_columns,
         
     except Exception as e:
         print(f"Error processing {table_name}: {str(e)}")
+        raise  # Re-raise to see full stack trace in logs
 
 ## Process certificate data
 process_data(

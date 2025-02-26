@@ -6,116 +6,86 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
-from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, TimestampType
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, FloatType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-job_name = args['JOB_NAME']
 
-## Hardcoded configurations
-s3_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+## Configurations
+s3_announcement_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_schema = "usastaffing_staging"
-redshift_table = f"{redshift_schema}.office"
+redshift_announcement_table = "usastaffing_staging.announcement"  # Changed from "announcements" to "announcement"
 
-## Initialize Spark and Glue context
+## Initialize contexts
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
-job.init(job_name, args)
+job.init(args['JOB_NAME'], args)
 
-## Log start
-print("Starting Glue job: {}".format(job_name))
-
-## Define the schema manually based on the Redshift table
-schema = StructType([
-    StructField("tennantId", IntegerType(), False),
-    StructField("officeId", LongType(), False),
-    StructField("officeName", StringType(), True),
-    StructField("officeCode", StringType(), True),
-    StructField("externalName", StringType(), True),
-    StructField("addressline1", StringType(), True),
-    StructField("addressline2", StringType(), True),
-    StructField("addressline3", StringType(), True),
-    StructField("city", StringType(), True),
-    StructField("zipcode", StringType(), True),
-    StructField("state", StringType(), True),
-    StructField("stateabbrevation", StringType(), True),
-    StructField("country", StringType(), True),
-    StructField("countryAbbrevation", StringType(), True),
-    StructField("phonenumber", StringType(), True),
-    StructField("faxnumber", StringType(), True),
-    StructField("dwlastmodifiedDateTime", StringType(), True)
+## Define schema for announcements (aligned with Redshift DDL)
+announcement_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("announcementId", LongType(), False),  # bigint
+    StructField("announcementNumber", StringType(), False),
+    StructField("announcementStatus", StringType(), True),
+    StructField("announcementTemplate", StringType(), True),
+    StructField("salaryType", StringType(), True),
+    StructField("minimumSalary", FloatType(), True),  # real
+    StructField("maximumSalary", FloatType(), True),  # real
+    StructField("notToExceed", StringType(), True),
+    StructField("totalOpenings", StringType(), True),
+    StructField("openDate", StringType(), True),  # Read as string, convert to datetime
+    StructField("closeDate", StringType(), True),  # Read as string, convert to datetime
+    StructField("releasedFlag", BooleanType(), True),
+    StructField("releasedDateTime", StringType(), True),  # Read as string, convert to datetime
+    StructField("applicationLimitSetFlag", BooleanType(), True),
+    StructField("applicationLimit", IntegerType(), True),
+    StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
+    StructField("externalContactId", LongType(), True),  # bigint
+    StructField("externalContactName", StringType(), True),
+    StructField("externalContactEmail", StringType(), True),
+    StructField("internalContactId", LongType(), True),  # bigint
+    StructField("internalContactName", StringType(), True),
+    StructField("internalContactEmail", StringType(), True),
+    StructField("usajobsControlNumber", LongType(), True),  # bigint
+    StructField("linkedUSAJOBSControlNumber", StringType(), True),
+    StructField("whoMayApply", StringType(), True),
+    StructField("whoMayApplyOverrideText", StringType(), True),
+    StructField("remoteJobClarificationText", StringType(), True),
+    StructField("appointmentTypeOverrideText", StringType(), True),
+    StructField("promotionPotential", StringType(), True),
+    StructField("usajobsJobStatus", StringType(), True),
+    StructField("lastModifiedDateTime", StringType(), True),  # Read as string, convert to datetime
+    StructField("dwLastModifiedDateTime", StringType(), True)  # Read as string, convert to datetime
 ])
 
-## Read CSV from S3
-print("Reading CSV from: {}".format(s3_input_path))
-csv_df = spark.read.option("header", "true") \
+## Read and process announcement data
+announcement_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
-    .schema(schema) \
-    .csv(s3_input_path)
+    .schema(announcement_schema) \
+    .csv(s3_announcement_input_path)
 
-## Log raw data
-print("Initial CSV row count: {}".format(csv_df.count()))
-print("CSV schema:")
-csv_df.printSchema()
-print("Sample raw data (first 5 rows):")
-csv_df.show(5, truncate=False)
+announcement_filtered_df = announcement_df.filter((col("tenantId").isNotNull()) & (col("announcementId").isNotNull()) & (col("announcementNumber").isNotNull())) \
+    .withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"))
 
-## Filter NOT NULL fields
-print("Filtering rows with NULL in tennantId or officeId")
-filtered_df = csv_df.filter(
-    (col("tennantId").isNotNull()) & (col("officeId").isNotNull())
+## Write announcement data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_announcement_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_announcement_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
 )
-print("Filtered row count: {}".format(filtered_df.count()))
-print("Sample filtered data (first 5 rows):")
-filtered_df.show(5, truncate=False)
-
-## Transform data
-print("Transforming data")
-final_df = filtered_df.select(
-    col("tennantId").alias("tennantId"),
-    col("officeId").alias("officeId"),
-    col("officeName").alias("officeName"),
-    col("officeCode").alias("officeCode"),
-    col("externalName").alias("externalName"),
-    col("addressline1").alias("addressline1"),
-    col("addressline2").alias("addressline2"),
-    col("addressline3").alias("addressline3"),
-    col("city").alias("city"),
-    col("zipcode").alias("zipcode"),
-    col("state").alias("state"),
-    col("stateabbrevation").alias("stateabbrevation"),
-    col("country").alias("country"),
-    col("countryAbbrevation").alias("countryAbbrevation"),
-    col("phonenumber").alias("phonenumber"),
-    col("faxnumber").alias("faxnumber"),
-    to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").alias("dwlastmodifiedDateTime")
-)
-print("Sample transformed data (first 5 rows):")
-final_df.show(5, truncate=False)
-
-## Write to Redshift with truncate
-print("Truncating Redshift table: {}".format(redshift_table))
-print("Writing to Redshift table: {}".format(redshift_table))
-try:
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=DynamicFrame.fromDF(final_df, glueContext, "redshift_frame"),
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": redshift_table,
-            "database": redshift_database,
-            "preactions": f"TRUNCATE TABLE {redshift_table}"  # Truncates table before loading
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
-    print("Data write completed successfully")
-except Exception as e:
-    print("Error writing to Redshift: {}".format(str(e)))
-    raise
 
 ## Commit the job
 job.commit()

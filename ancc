@@ -6,19 +6,21 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp
-from pyspark.sql.types import StructType, StructField, IntegerType, StringType
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/"
-s3_input_path = s3_path + "offices/"  # Targeting the 'offices' folder
+s3_office_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+s3_org_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
+s3_customer_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/customers/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_schema = "usastaffing_staging"
-redshift_table = f"{redshift_schema}.office"  # Fully qualified table name
+redshift_office_table = "usastaffing_staging.office"
+redshift_org_table = "usastaffing_staging.organization"
+redshift_customer_table = "usastaffing_staging.customer"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -27,61 +29,123 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema matching Redshift DDL
-schema = StructType([
+## Define schema for office
+office_schema = StructType([
     StructField("tenantId", IntegerType(), False),
-    StructField("officeId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
     StructField("officeName", StringType(), True),
     StructField("officeCode", StringType(), True),
     StructField("externalName", StringType(), True),
-    StructField("addressLine1", StringType(), True),
-    StructField("addressLine2", StringType(), True),
-    StructField("addressLine3", StringType(), True),
+    StructField("addressline1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
     StructField("city", StringType(), True),
-    StructField("zipCode", StringType(), True),
+    StructField("zipcode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateabbreviation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbreviation", StringType(), True),
+    StructField("phonenumber", StringType(), True),
+    StructField("faxnumber", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
+])
+
+## Define schema for organization
+org_schema = StructType([
+    StructField("tenantID", IntegerType(), False),
+    StructField("orgId", IntegerType(), False),
+    StructField("tenantName", StringType(), True),
+    StructField("tenantcode", StringType(), True),
+    StructField("organizationName", StringType(), True),
+    StructField("organizationCode", StringType(), True),
+    StructField("dwlastModifieddatetime", StringType(), True)
+])
+
+## Define schema for customers
+customer_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("customerID", LongType(), False),
+    StructField("customerName", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("agencycode", StringType(), True),
+    StructField("agencyName", StringType(), True),
+    StructField("agencyReferenceCode", StringType(), True),
+    StructField("departmentCode", StringType(), True),
+    StructField("departmentName", StringType(), True),
+    StructField("addressLine1", StringType(), True),
+    StructField("addressline2", StringType(), True),
+    StructField("addressline3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("ZipCode", StringType(), True),
     StructField("state", StringType(), True),
     StructField("stateAbbreviation", StringType(), True),
     StructField("country", StringType(), True),
     StructField("countryAbbreviation", StringType(), True),
     StructField("phoneNumber", StringType(), True),
     StructField("faxNumber", StringType(), True),
-    StructField("dwLastModifiedDateTime", StringType(), True)
+    StructField("opfInstance", StringType(), True),
+    StructField("dwlastmodifiedDateTime", StringType(), True)
 ])
 
-## Read, filter, and transform data from the 'offices' folder
-df = spark.read.option("header", "true") \
+## Read and process office data
+office_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
-    .schema(schema) \
-    .csv(s3_input_path) \
-    .filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
-    .select(
-        col("tenantId"),
-        col("officeId"),
-        col("officeName"),
-        col("officeCode"),
-        col("externalName"),
-        col("addressLine1"),
-        col("addressLine2"),
-        col("addressLine3"),
-        col("city"),
-        col("zipCode"),
-        col("state"),
-        col("stateAbbreviation"),
-        col("country"),
-        col("countryAbbreviation"),
-        col("phoneNumber"),
-        col("faxNumber"),
-        to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSXXX").alias("dwLastModifiedDateTime")
-    )
+    .schema(office_schema) \
+    .csv(s3_office_input_path)
 
-## Write to existing Redshift table with truncate
+office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+
+## Read and process organization data
+org_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(org_schema) \
+    .csv(s3_org_input_path)
+
+org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
+    .withColumn("dwlastModifieddatetime", to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+
+## Read and process customer data
+customer_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(customer_schema) \
+    .csv(s3_customer_input_path)
+
+customer_filtered_df = customer_df.filter((col("tenantId").isNotNull()) & (col("customerID").isNotNull())) \
+    .withColumn("dwlastmodifiedDateTime", to_timestamp(col("dwlastmodifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+
+## Write office data to Redshift
 glueContext.write_dynamic_frame.from_jdbc_conf(
-    frame=DynamicFrame.fromDF(df, glueContext, "redshift_frame"),
+    frame=DynamicFrame.fromDF(office_filtered_df, glueContext, "office_redshift_frame"),
     catalog_connection=redshift_connection,
     connection_options={
-        "dbtable": redshift_table,
+        "dbtable": redshift_office_table,
         "database": redshift_database,
-        "preactions": f"TRUNCATE TABLE {redshift_table}"
+        "preactions": f"TRUNCATE TABLE {redshift_office_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Write organization data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(org_filtered_df, glueContext, "org_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_org_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_org_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Write customer data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(customer_filtered_df, glueContext, "customer_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_customer_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_customer_table}"
     },
     redshift_tmp_dir=redshift_temp_dir
 )

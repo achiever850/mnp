@@ -89,18 +89,19 @@ announcement_filtered_df.show(5, truncate=False)
 row_count = announcement_filtered_df.count()
 print(f"Number of rows to write: {row_count}")
 
-## Test writing a small subset of data to Redshift first
+## Convert to DynamicFrame
+announcement_dynamic_frame = DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame")
+
+# Workaround for applying limit: Convert DynamicFrame to DataFrame, apply limit, and then convert back
+announcement_sample_df = announcement_filtered_df.limit(10)
+announcement_sample_dynamic_frame = DynamicFrame.fromDF(announcement_sample_df, glueContext, "announcement_sample_frame")
+
+# Test writing a small subset (first 10 rows) to Redshift for connection testing
 try:
-    # Convert to DynamicFrame
-    announcement_dynamic_frame = DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame")
-    
-    # Write a small sample (first 10 rows) to test the Redshift connection
-    sample_dynamic_frame = announcement_dynamic_frame.limit(10)
-    
     print("Writing a small sample of data to Redshift for connection testing...")
     
     glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=sample_dynamic_frame,
+        frame=announcement_sample_dynamic_frame,
         catalog_connection=redshift_connection,
         connection_options={
             "dbtable": redshift_announcement_table,
@@ -113,7 +114,7 @@ except Exception as e:
     print(f"Error during sample write: {str(e)}")
     raise
 
-## Write announcement data to Redshift with error handling
+## Write full data to Redshift with error handling
 try:
     print("Writing full data to Redshift...")
     glueContext.write_dynamic_frame.from_jdbc_conf(

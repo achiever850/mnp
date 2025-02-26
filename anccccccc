@@ -1,0 +1,218 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, FloatType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_office_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/offices/"
+s3_org_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/organizations/"
+s3_customer_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/customers/"
+s3_announcement_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"  # Added
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_office_table = "usastaffing_staging.office"
+redshift_org_table = "usastaffing_staging.organization"
+redshift_customer_table = "usastaffing_staging.customer"
+redshift_announcement_table = "usastaffing_staging.announcements"  # Added
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define schema for office (aligned with Redshift DDL)
+office_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("officeId", LongType(), False),
+    StructField("officeName", StringType(), True),
+    StructField("officeCode", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("addressLine1", StringType(), True),
+    StructField("addressLine2", StringType(), True),
+    StructField("addressLine3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipCode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateAbbreviation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbreviation", StringType(), True),
+    StructField("phoneNumber", StringType(), True),
+    StructField("faxNumber", StringType(), True),
+    StructField("dwLastModifiedDateTime", StringType(), True)
+])
+
+## Define schema for organization (assuming Redshift DDL is similar)
+org_schema = StructType([
+    StructField("tenantID", IntegerType(), False),
+    StructField("orgId", IntegerType(), False),
+    StructField("tenantName", StringType(), True),
+    StructField("tenantcode", StringType(), True),
+    StructField("organizationName", StringType(), True),
+    StructField("organizationCode", StringType(), True),
+    StructField("dwlastModifieddatetime", StringType(), True)
+])
+
+## Define schema for customers (assuming Redshift DDL is similar)
+customer_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("customerID", LongType(), False),
+    StructField("customerName", StringType(), True),
+    StructField("externalName", StringType(), True),
+    StructField("agencycode", StringType(), True),
+    StructField("agencyName", StringType(), True),
+    StructField("agencyReferenceCode", StringType(), True),
+    StructField("departmentCode", StringType(), True),
+    StructField("departmentName", StringType(), True),
+    StructField("addressLine1", StringType(), True),
+    StructField("addressLine2", StringType(), True),
+    StructField("addressLine3", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("zipCode", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("stateAbbreviation", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("countryAbbreviation", StringType(), True),
+    StructField("phoneNumber", StringType(), True),
+    StructField("faxNumber", StringType(), True),
+    StructField("opfInstance", StringType(), True),
+    StructField("dwLastModifiedDateTime", StringType(), True)
+])
+
+## Define schema for announcements (aligned with Redshift DDL)
+announcement_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("announcementId", LongType(), False),  # bigint
+    StructField("announcementNumber", StringType(), False),
+    StructField("announcementStatus", StringType(), True),
+    StructField("announcementTemplate", StringType(), True),
+    StructField("salaryType", StringType(), True),
+    StructField("minimumSalary", FloatType(), True),  # real
+    StructField("maximumSalary", FloatType(), True),  # real
+    StructField("notToExceed", StringType(), True),
+    StructField("totalOpenings", StringType(), True),
+    StructField("openDate", StringType(), True),  # Read as string, convert to datetime
+    StructField("closeDate", StringType(), True),  # Read as string, convert to datetime
+    StructField("releasedFlag", BooleanType(), True),
+    StructField("releasedDateTime", StringType(), True),  # Read as string, convert to datetime
+    StructField("applicationLimitSetFlag", BooleanType(), True),
+    StructField("applicationLimit", IntegerType(), True),
+    StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
+    StructField("externalContactId", LongType(), True),  # bigint
+    StructField("externalContactName", StringType(), True),
+    StructField("externalContactEmail", StringType(), True),
+    StructField("internalContactId", LongType(), True),  # bigint
+    StructField("internalContactName", StringType(), True),
+    StructField("internalContactEmail", StringType(), True),
+    StructField("usajobsControlNumber", LongType(), True),  # bigint
+    StructField("linkedUSAJOBSControlNumber", StringType(), True),
+    StructField("whoMayApply", StringType(), True),
+    StructField("whoMayApplyOverrideText", StringType(), True),
+    StructField("remoteJobClarificationText", StringType(), True),
+    StructField("appointmentTypeOverrideText", StringType(), True),
+    StructField("promotionPotential", StringType(), True),
+    StructField("usajobsJobStatus", StringType(), True),
+    StructField("lastModifiedDateTime", StringType(), True),  # Read as string, convert to datetime
+    StructField("dwLastModifiedDateTime", StringType(), True)  # Read as string, convert to datetime
+])
+
+## Read and process office data
+office_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(office_schema) \
+    .csv(s3_office_input_path)
+
+office_filtered_df = office_df.filter((col("tenantId").isNotNull()) & (col("officeId").isNotNull())) \
+    .withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"))
+
+## Read and process organization data
+org_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(org_schema) \
+    .csv(s3_org_input_path)
+
+org_filtered_df = org_df.filter((col("tenantID").isNotNull()) & (col("orgId").isNotNull())) \
+    .withColumn("dwlastModifieddatetime", to_timestamp(col("dwlastModifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"))
+
+## Read and process customer data
+customer_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(customer_schema) \
+    .csv(s3_customer_input_path)
+
+customer_filtered_df = customer_df.filter((col("tenantId").isNotNull()) & (col("customerID").isNotNull())) \
+    .withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"))
+
+## Read and process announcement data
+announcement_df = spark.read.option("header", "true") \
+    .option("delimiter", ",") \
+    .schema(announcement_schema) \
+    .csv(s3_announcement_input_path)
+
+announcement_filtered_df = announcement_df.filter((col("tenantId").isNotNull()) & (col("announcementId").isNotNull()) & (col("announcementNumber").isNotNull())) \
+    .withColumn("openDate", to_timestamp(col("openDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("closeDate", to_timestamp(col("closeDate"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("releasedDateTime", to_timestamp(col("releasedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("lastModifiedDateTime", to_timestamp(col("lastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX")) \
+    .withColumn("dwLastModifiedDateTime", to_timestamp(col("dwLastModifiedDateTime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX"))
+
+## Write office data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(office_filtered_df, glueContext, "office_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_office_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_office_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Write organization data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(org_filtered_df, glueContext, "org_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_org_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_org_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Write customer data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(customer_filtered_df, glueContext, "customer_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_customer_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_customer_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Write announcement data to Redshift
+glueContext.write_dynamic_frame.from_jdbc_conf(
+    frame=DynamicFrame.fromDF(announcement_filtered_df, glueContext, "announcement_redshift_frame"),
+    catalog_connection=redshift_connection,
+    connection_options={
+        "dbtable": redshift_announcement_table,
+        "database": redshift_database,
+        "preactions": f"TRUNCATE TABLE {redshift_announcement_table}"
+    },
+    redshift_tmp_dir=redshift_temp_dir
+)
+
+## Commit the job
+job.commit()

@@ -5,7 +5,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
-from pyspark.sql.functions import col, to_timestamp
+from pyspark.sql.functions import col
 from pyspark.sql.types import *
 
 ## Get job parameters
@@ -25,8 +25,8 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define schema for announcement
-ddl_schema = StructType([
+## Define schema for announcement with StringType for date fields
+announcement_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("announcementId", LongType(), False),
     StructField("announcementNumber", StringType(), False),
@@ -37,10 +37,10 @@ ddl_schema = StructType([
     StructField("maximumSalary", DoubleType(), True),
     StructField("notToExceed", StringType(), True),
     StructField("totalOpenings", StringType(), True),
-    StructField("openDate", TimestampType(), True),
-    StructField("closeDate", TimestampType(), True),
+    StructField("openDate", StringType(), True),  # Changed to StringType
+    StructField("closeDate", StringType(), True),  # Changed to StringType
     StructField("releasedFlag", BooleanType(), True),
-    StructField("releasedDateTime", TimestampType(), True),
+    StructField("releasedDateTime", StringType(), True),  # Changed to StringType
     StructField("applicationLimitSetFlag", BooleanType(), True),
     StructField("applicationLimit", IntegerType(), True),
     StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
@@ -58,14 +58,14 @@ ddl_schema = StructType([
     StructField("appointmentTypeOverrideText", StringType(), True),
     StructField("promotionPotential", StringType(), True),
     StructField("usajobsJobStatus", StringType(), True),
-    StructField("lastModifiedDateTime", TimestampType(), True),
-    StructField("dwLastModifiedDateTime", TimestampType(), True)
+    StructField("lastModifiedDateTime", StringType(), True),  # Changed to StringType
+    StructField("dwLastModifiedDateTime", StringType(), True)  # Changed to StringType
 ])
 
-## Read and process announcement data
+## Read and process announcement data with the new schema
 announcement_df = spark.read.option("header", "true") \
     .option("delimiter", ",") \
-    .schema(ddl_schema) \
+    .schema(announcement_schema) \
     .csv(s3_announcement_input_path)
 
 announcement_filtered_df = announcement_df.filter((col("tenantId").isNotNull()) & (col("announcementId").isNotNull()))

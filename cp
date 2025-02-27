@@ -90,7 +90,8 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.printSchema()
         print(f"Sample data for {table_name} (raw):")
         df.show(5, truncate=False)
-        print(f"Row count before filter: {df.count()}")
+        raw_count = df.count()
+        print(f"Row count before filter: {raw_count}")
 
         # Hardcoded filter for NOT NULL columns
         filtered_df = df.filter(
@@ -104,10 +105,11 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Debug: Check filtered data
         print(f"Sample data after filter for {table_name}:")
         filtered_df.show(5, truncate=False)
-        print(f"Row count after filter: {filtered_df.count()}")
+        filtered_count = filtered_df.count()
+        print(f"Row count after filter: {filtered_count}")
 
-        if filtered_df.count() == 0:
-            raise ValueError(f"No rows remain after filtering for {table_name}. Check CSV data for NOT NULL columns.")
+        if filtered_count == 0:
+            raise ValueError(f"No rows remain after filtering for {table_name}. Check CSV for NOT NULL columns: tenantId, rankingListId, applicationId, listApplicationId, rankOrder.")
 
         # Transform timestamp columns
         timestamp_columns = ["startDateTime", "addedDateTime", "auditDateTime", "certifiedDateTime",
@@ -135,14 +137,16 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 
         # Explicit mapping to enforce schema
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
-                    for field in certificateapps_schema.fields]
+                    for field in schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Debug: Check DynamicFrame schema
+        # Debug: Check DynamicFrame schema and sample
         print(f"DynamicFrame schema for {table_name}:")
         print(mapped_frame.schema())
+        print(f"DynamicFrame row count: {mapped_frame.count()}")
 
         # Write to Redshift
+        print(f"Attempting to write to Redshift table {table_name}...")
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,

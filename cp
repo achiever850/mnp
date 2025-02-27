@@ -6,17 +6,17 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
 from pyspark.sql.functions import col, to_timestamp, when
-from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, StringType, BooleanType, TimestampType
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_certificate_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/certificates/"
+s3_certificateapps_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/certificateapplications/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_certificate_table = "usastaffing_staging.certificate"
+redshift_certificateapps_table = "usastaffing_staging.certificateapplication"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -25,40 +25,58 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define certificate schema (aligned with Redshift)
-certificate_schema = StructType([
+## Define certificateapplication schema (aligned with Redshift DDL)
+certificateapps_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("rankingListId", IntegerType(), False),
-    StructField("certificateNumber", StringType(), True),
-    StructField("certificateType", StringType(), True),
-    StructField("certificateStatus", StringType(), True),
-    StructField("certificateOrder", StringType(), True),
-    StructField("certificatePriorityOrder", StringType(), True),
-    StructField("applicantListName", StringType(), True),
-    StructField("signedDateTime", TimestampType(), True),
-    StructField("issueDateTime", TimestampType(), True),
-    StructField("issuer", StringType(), True),
-    StructField("certificateAuditedFlag", BooleanType(), True),
-    StructField("initialAuditCompleteDateTime", TimestampType(), True),
-    StructField("finalAuditCompleteDateTime", TimestampType(), True),
-    StructField("auditedBy", StringType(), True),
-    StructField("referMethod", StringType(), True),
-    StructField("referMethodNumber", FloatType(), True),
-    StructField("certificateAmendedFlag", BooleanType(), True),
-    StructField("certificateCancelledFlag", BooleanType(), True),
-    StructField("certificateExpiredFlag", BooleanType(), True),
-    StructField("certificateExpirationDate", TimestampType(), True),
-    StructField("ctapictapWellQualifiedScore", FloatType(), True),
-    StructField("rankBy", StringType(), True),
-    StructField("tieBreaker", StringType(), True),
-    StructField("candidateInventoryEnabledFlag", BooleanType(), True),
-    StructField("candidateInventoryStartDate", TimestampType(), True),
-    StructField("candidateInventoryEndDate", TimestampType(), True),
+    StructField("applicationId", LongType(), True),
+    StructField("listApplicationId", LongType(), True),
+    StructField("applicationNumber", StringType(), True),
+    StructField("firstName", StringType(), True),
+    StructField("middleName", StringType(), True),
+    StructField("lastName", StringType(), True),
+    StructField("suffix", StringType(), True),
+    StructField("applicationName", StringType(), True),
+    StructField("startDateTime", TimestampType(), True),
+    StructField("priorityDescription", StringType(), True),
+    StructField("rankOrder", IntegerType(), True),
+    StructField("rating", StringType(), True),
+    StructField("recordStatusCode", StringType(), True),
+    StructField("recordStatusCodeDescription", StringType(), True),
+    StructField("addedFlag", BooleanType(), True),
+    StructField("addedDateTime", TimestampType(), True),
+    StructField("auditCode", StringType(), True),
+    StructField("auditDateTime", TimestampType(), True),
+    StructField("certifiedDateTime", TimestampType(), True),
+    StructField("eligibilityAdjudicationStatus", StringType(), True),
+    StructField("eligibilityClaimed", StringType(), True),
+    StructField("eligibleSeries", StringType(), True),
+    StructField("eligibilityStartDate", TimestampType(), True),
+    StructField("eligibilityEndDate", TimestampType(), True),
+    StructField("expiredFlag", BooleanType(), True),
+    StructField("veteranPreferenceCode", StringType(), True),
+    StructField("veteranPreferenceDescription", StringType(), True),
+    StructField("hiredPDNumber", StringType(), True),
+    StructField("hiredPositionTitle", StringType(), True),
+    StructField("hiredSeries", StringType(), True),
+    StructField("hiredSeriesTitle", StringType(), True),
+    StructField("hiredCity", StringType(), True),
+    StructField("hiredCounty", StringType(), True),
+    StructField("hiredState", StringType(), True),
+    StructField("hiredCountry", StringType(), True),
+    StructField("hiredLocationDescription", StringType(), True),
+    StructField("markedAsFavoriteFlag", BooleanType(), True),
+    StructField("markedForFollowUpFlag", BooleanType(), True),
+    StructField("reorderedFlag", BooleanType(), True),
+    StructField("returnStatus", StringType(), True),
+    StructField("usaHireCompletedDate", TimestampType(), True),
+    StructField("originallySubmittedDateTime", TimestampType(), True),
+    StructField("lastSubmittedDateTime", TimestampType(), True),
     StructField("lastModifiedDateTime", TimestampType(), True),
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function
+## Process data function (identical to certificate)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -74,7 +92,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter for certificate
+        # Hardcoded filter for certificateapplication
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & (col("rankingListId").isNotNull())
         )
@@ -84,17 +102,17 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         filtered_df.show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 
-        # Transform timestamp columns (ensure conversion)
-        timestamp_columns = ["signedDateTime", "issueDateTime", "initialAuditCompleteDateTime",
-                            "finalAuditCompleteDateTime", "certificateExpirationDate",
-                            "lastModifiedDateTime", "dwLastModifiedDateTime",
-                            "candidateInventoryStartDate", "candidateInventoryEndDate"]
+        # Transform timestamp columns
+        timestamp_columns = ["startDateTime", "addedDateTime", "auditDateTime", "certifiedDateTime",
+                            "eligibilityStartDate", "eligibilityEndDate", "usaHireCompletedDate",
+                            "originallySubmittedDateTime", "lastSubmittedDateTime",
+                            "lastModifiedDateTime", "dwLastModifiedDateTime"]
         for ts_col in timestamp_columns:
             filtered_df = filtered_df.withColumn(ts_col, to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
 
         # Cast boolean fields
-        boolean_cols = ["certificateAuditedFlag", "certificateAmendedFlag", "certificateCancelledFlag",
-                        "certificateExpiredFlag", "candidateInventoryEnabledFlag"]
+        boolean_cols = ["addedFlag", "expiredFlag", "markedAsFavoriteFlag",
+                        "markedForFollowUpFlag", "reorderedFlag"]
         for b_col in boolean_cols:
             filtered_df = filtered_df.withColumn(b_col, when(col(b_col) == "true", True)
                                                 .when(col(b_col) == "false", False)
@@ -109,10 +127,10 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 
         # Explicit mapping to enforce schema
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
-                    for field in certificate_schema.fields]
+                    for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Write to Redshift without auto-creation
+        # Write to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
@@ -120,7 +138,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "dbtable": table_name,
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
-                "createTableIfNotExists": "false"  # Disable dynamic table creation
+                "createTableIfNotExists": "false"
             },
             redshift_temp_dir=temp_dir
         )
@@ -130,9 +148,9 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         print(f"Error processing {table_name}: {str(e)}")
         raise
 
-## Process certificate data
+## Process certificateapplication data
 process_data(
-    s3_certificate_input_path, certificate_schema, redshift_certificate_table,
+    s3_certificateapps_input_path, certificateapps_schema, redshift_certificateapps_table,
     redshift_connection, redshift_temp_dir
 )
 

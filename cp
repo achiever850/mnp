@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (with table existence check)
+## Process data function (identical to previous working certificateapplication)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -92,7 +92,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter for certificateapplication, updated for NOT NULL columns
+        # Hardcoded filter updated for all NOT NULL columns
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & 
             (col("rankingListId").isNotNull()) & 
@@ -131,29 +131,10 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 
         # Explicit mapping to enforce schema
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
-                    for field in schema.fields]
+                    for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Check if table exists in Redshift
-        check_query = f"""
-            SELECT COUNT(*) 
-            FROM information_schema.tables 
-            WHERE table_schema = 'usastaffing_staging' 
-            AND table_name = 'certificateapplication'
-        """
-        check_df = glueContext.read.format("jdbc") \
-            .option("url", "jdbc:redshift://<your-redshift-endpoint>:5439/{redshift_database}".format(redshift_database=redshift_database)) \
-            .option("driver", "com.amazon.redshift.jdbc.Driver") \
-            .option("query", check_query) \
-            .option("user", "<your-redshift-username>") \
-            .option("password", "<your-redshift-password>") \
-            .load()
-        
-        table_exists = check_df.collect()[0][0] > 0
-        if not table_exists:
-            raise ValueError(f"Table {table_name} does not exist in Redshift. Aborting job.")
-
-        # Write to Redshift
+        # Write to Redshift with redshift_tmp_dir in connection_options
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
@@ -161,6 +142,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "dbtable": table_name,
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
+                "createTableIfNotExists": "false",
                 "redshiftTmpDir": temp_dir
             }
         )

@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate with updated table check)
+## Process data function (exact match to certificate)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -128,25 +128,8 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 
         # Explicit mapping to enforce schema
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
-                    for field in schema.fields]
+                    for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
-
-        # Check if table exists in Redshift using Glue connection
-        check_query = f"""
-            SELECT COUNT(*) 
-            FROM information_schema.tables 
-            WHERE table_schema = 'usastaffing_staging' 
-            AND table_name = 'certificateapplication'
-        """
-        check_df = glueContext.read.format("jdbc") \
-            .option("catalog_connection", redshift_connection) \
-            .option("query", check_query) \
-            .option("database", redshift_database) \
-            .load()
-        
-        table_exists = check_df.collect()[0][0] > 0
-        if not table_exists:
-            raise ValueError(f"Table {table_name} does not exist in Redshift. Please create it manually with the correct DDL.")
 
         # Write to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(
@@ -156,6 +139,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "dbtable": table_name,
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
+                "createTableIfNotExists": "false",
                 "redshiftTmpDir": temp_dir
             }
         )

@@ -14,7 +14,6 @@ args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 ## Configurations
 s3_certificateapps_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/certificateapplications/"
 redshift_connection = "hcd_dev_redshift_connection"
-redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_certificateapps_table = "usastaffing_staging.certificateapplication"
 
@@ -77,7 +76,7 @@ certificateapps_schema = StructType([
 ])
 
 ## Process data function (identical to certificate)
-def process_data(input_path, schema, table_name, connection, temp_dir):
+def process_data(input_path, schema, table_name, connection):
     try:
         # Read the CSV into a DataFrame
         df = spark.read.option("header", "true") \
@@ -130,7 +129,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                     for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Write to Redshift
+        # Write to Redshift (removed redshift_temp_dir)
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
@@ -139,8 +138,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
                 "createTableIfNotExists": "false"
-            },
-            redshift_temp_dir=temp_dir
+            }
         )
         print(f"Data successfully loaded into {table_name}")
         
@@ -151,7 +149,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 ## Process certificateapplication data
 process_data(
     s3_certificateapps_input_path, certificateapps_schema, redshift_certificateapps_table,
-    redshift_connection, redshift_temp_dir
+    redshift_connection
 )
 
 ## Commit the job

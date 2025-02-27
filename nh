@@ -1,0 +1,172 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp, when
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_newhires_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_newhires_table = "usastaffing_staging.newhire"  # Singular as per DDL
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define newhire schema (aligned with Redshift DDL)
+newhires_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("newHireId", LongType(), False),
+    StructField("newHireNumber", StringType(), True),
+    StructField("newHireStatus", StringType(), True),
+    StructField("firstName", StringType(), True),
+    StructField("middleName", StringType(), True),
+    StructField("lastName", StringType(), True),
+    StructField("suffix", StringType(), True),
+    StructField("newHireName", StringType(), True),
+    StructField("email", StringType(), True),
+    StructField("addressLine1", StringType(), True),
+    StructField("addressLine2", StringType(), True),
+    StructField("aptSuite", StringType(), True),
+    StructField("city", StringType(), True),
+    StructField("state", StringType(), True),
+    StructField("zipCode", StringType(), True),
+    StructField("country", StringType(), True),
+    StructField("creationDate", TimestampType(), True),
+    StructField("appointmentType", StringType(), True),
+    StructField("effectiveDateofAppointment", TimestampType(), True),
+    StructField("projectedStartDate", TimestampType(), True),
+    StructField("prolongedStartDateReason", StringType(), True),
+    StructField("actualStartDate", TimestampType(), True),
+    StructField("newHireHyperlink", StringType(), True),
+    StructField("firstLoggedInDate", TimestampType(), True),
+    StructField("lastLoggedInDate", TimestampType(), True),
+    StructField("onboardingProcessOwner", StringType(), True),
+    StructField("onboardingProcessOwnerEmail", StringType(), True),
+    StructField("supervisorManager", StringType(), True),
+    StructField("supervisorManagerEmail", StringType(), True),
+    StructField("eVerifyCaseNumber", StringType(), True),
+    StructField("eVerifyFlag", BooleanType(), True),
+    StructField("pcsEligibleFlag", BooleanType(), True),
+    StructField("adjudicatedVeteransPreferenceCode", StringType(), True),
+    StructField("adjudicatedVeteransPreferenceDescription", StringType(), True),
+    StructField("activityUnit", StringType(), True),
+    StructField("branchOrganization", StringType(), True),
+    StructField("bureauDivision", StringType(), True),
+    StructField("agencyDepartment", StringType(), True),
+    StructField("agencyDepartmentAddress1", StringType(), True),
+    StructField("agencyDepartmentAddress2", StringType(), True),
+    StructField("agencyDepartmentAddress3", StringType(), True),
+    StructField("agencyDepartmentCity", StringType(), True),
+    StructField("agencyDepartmentState", StringType(), True),
+    StructField("agencyDepartmentZipCode", StringType(), True),
+    StructField("agencyDepartmentCountry", StringType(), True),
+    StructField("dutyLocationAddressLine1", StringType(), True),
+    StructField("dutyLocationAddressLine2", StringType(), True),
+    StructField("dutyLocationCity", StringType(), True),
+    StructField("dutyLocationState", StringType(), True),
+    StructField("dutyLocationCountry", StringType(), True),
+    StructField("positionDescriptionNumber", StringType(), True),
+    StructField("positionDescriptionTitle", StringType(), True),
+    StructField("positionDescriptionPayPlan", StringType(), True),
+    StructField("positionDescriptionSeries", StringType(), True),
+    StructField("positionDescriptionGrade", StringType(), True),
+    StructField("payPlanSeriesGrade", StringType(), True),
+    StructField("lastUpdatedDateTime", TimestampType(), True),
+    StructField("dwLastModifiedDateTime", TimestampType(), True)
+])
+
+## Process data function (exact match to certificate)
+def process_data(input_path, schema, table_name, connection, temp_dir):
+    try:
+        # Read the CSV into a DataFrame
+        df = spark.read.option("header", "true") \
+            .option("delimiter", ",") \
+            .schema(schema) \
+            .csv(input_path)
+        
+        # Debug: Verify DataFrame
+        print(f"Schema for {table_name}:")
+        df.printSchema()
+        print(f"Sample data for {table_name} (raw):")
+        df.show(5, truncate=False)
+        print(f"Row count before filter: {df.count()}")
+
+        # Hardcoded filter for newhire (only NOT NULL columns)
+        filtered_df = df.filter(
+            (col("tenantId").isNotNull()) & 
+            (col("newHireId").isNotNull())
+        )
+
+        # Debug: Check filtered data
+        print(f"Sample data after filter for {table_name}:")
+        filtered_df.show(5, truncate=False)
+        print(f"Row count after filter: {filtered_df.count()}")
+
+        # Transform timestamp columns
+        timestamp_columns = [
+            "creationDate", "effectiveDateofAppointment", "projectedStartDate", "actualStartDate",
+            "firstLoggedInDate", "lastLoggedInDate", "lastUpdatedDateTime", "dwLastModifiedDateTime"
+        ]
+        for ts_col in timestamp_columns:
+            filtered_df = filtered_df.withColumn(ts_col, to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+
+        # Cast boolean fields
+        boolean_cols = [
+            "eVerifyFlag", "pcsEligibleFlag"
+        ]
+        for b_col in boolean_cols:
+            filtered_df = filtered_df.withColumn(b_col, when(col(b_col) == "true", True)
+                                                .when(col(b_col) == "false", False)
+                                                .otherwise(None).cast(BooleanType()))
+
+        # Debug: Final transformed data
+        print(f"Sample data after transformations for {table_name}:")
+        filtered_df.show(5, truncate=False)
+
+        # Convert to DynamicFrame
+        dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
+
+        # Explicit mapping to enforce schema
+        mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
+                    for field in schema.fields]
+        mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
+
+        # Write to Redshift
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=mapped_frame,
+            catalog_connection=connection,
+            connection_options={
+                "dbtable": table_name,
+                "database": redshift_database,
+                "preactions": f"TRUNCATE TABLE {table_name}",
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": temp_dir
+            }
+        )
+        print(f"Data successfully loaded into {table_name}")
+        
+    except Exception as e:
+        print(f"Error processing {table_name}: {str(e)}")
+        raise
+
+## Process newhire data
+process_data(
+    s3_newhires_input_path, newhires_schema, redshift_newhires_table,
+    redshift_connection, redshift_temp_dir
+)
+
+## Commit the job
+job.commit()

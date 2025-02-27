@@ -29,8 +29,8 @@ job.init(args['JOB_NAME'], args)
 certificateapps_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("rankingListId", IntegerType(), False),
-    StructField("applicationId", LongType(), False),  # Updated to NOT NULL
-    StructField("listApplicationId", LongType(), False),  # Updated to NOT NULL
+    StructField("applicationId", LongType(), False),
+    StructField("listApplicationId", LongType(), False),
     StructField("applicationNumber", StringType(), True),
     StructField("firstName", StringType(), True),
     StructField("middleName", StringType(), True),
@@ -39,7 +39,7 @@ certificateapps_schema = StructType([
     StructField("applicationName", StringType(), True),
     StructField("startDateTime", TimestampType(), True),
     StructField("priorityDescription", StringType(), True),
-    StructField("rankOrder", IntegerType(), False),  # Updated to NOT NULL
+    StructField("rankOrder", IntegerType(), False),
     StructField("rating", StringType(), True),
     StructField("recordStatusCode", StringType(), True),
     StructField("recordStatusCodeDescription", StringType(), True),
@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (identical to previous working certificateapplication)
+## Process data function (with enhanced debugging)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -92,7 +92,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter updated for all NOT NULL columns
+        # Hardcoded filter for NOT NULL columns
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & 
             (col("rankingListId").isNotNull()) & 
@@ -105,6 +105,9 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         print(f"Sample data after filter for {table_name}:")
         filtered_df.show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
+
+        if filtered_df.count() == 0:
+            raise ValueError(f"No rows remain after filtering for {table_name}. Check CSV data for NOT NULL columns.")
 
         # Transform timestamp columns
         timestamp_columns = ["startDateTime", "addedDateTime", "auditDateTime", "certifiedDateTime",
@@ -125,6 +128,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Debug: Final transformed data
         print(f"Sample data after transformations for {table_name}:")
         filtered_df.show(5, truncate=False)
+        print(f"Row count after transformations: {filtered_df.count()}")
 
         # Convert to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
@@ -134,7 +138,11 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                     for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Write to Redshift with redshift_tmp_dir in connection_options
+        # Debug: Check DynamicFrame schema
+        print(f"DynamicFrame schema for {table_name}:")
+        print(mapped_frame.schema())
+
+        # Write to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,

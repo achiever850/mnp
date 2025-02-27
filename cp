@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate with updated filter)
+## Process data function (exact match to certificate with updated table check)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -92,13 +92,10 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter for certificateapplication (updated to enforce all NOT NULL columns)
+        # Hardcoded filter for certificateapplication
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & 
-            (col("rankingListId").isNotNull()) & 
-            (col("applicationId").isNotNull()) & 
-            (col("listApplicationId").isNotNull()) & 
-            (col("rankOrder").isNotNull())
+            (col("rankingListId").isNotNull())
         )
 
         # Debug: Check filtered data
@@ -134,6 +131,23 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                     for field in schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
+        # Check if table exists in Redshift using Glue connection
+        check_query = f"""
+            SELECT COUNT(*) 
+            FROM information_schema.tables 
+            WHERE table_schema = 'usastaffing_staging' 
+            AND table_name = 'certificateapplication'
+        """
+        check_df = glueContext.read.format("jdbc") \
+            .option("catalog_connection", redshift_connection) \
+            .option("query", check_query) \
+            .option("database", redshift_database) \
+            .load()
+        
+        table_exists = check_df.collect()[0][0] > 0
+        if not table_exists:
+            raise ValueError(f"Table {table_name} does not exist in Redshift. Please create it manually with the correct DDL.")
+
         # Write to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
@@ -142,7 +156,6 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "dbtable": table_name,
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
-                "createTableIfNotExists": "false",
                 "redshiftTmpDir": temp_dir
             }
         )

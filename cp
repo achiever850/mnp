@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate)
+## Process data function (exact match to certificate with added debug)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -92,7 +92,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter for certificateapplication (updated for NOT NULL columns)
+        # Hardcoded filter for certificateapplication (minimal, matching certificate)
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & 
             (col("rankingListId").isNotNull())
@@ -101,7 +101,8 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Debug: Check filtered data
         print(f"Sample data after filter for {table_name}:")
         filtered_df.show(5, truncate=False)
-        print(f"Row count after filter: {filtered_df.count()}")
+        filtered_count = filtered_df.count()
+        print(f"Row count after filter: {filtered_count}")
 
         # Transform timestamp columns
         timestamp_columns = ["startDateTime", "addedDateTime", "auditDateTime", "certifiedDateTime",
@@ -122,6 +123,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Debug: Final transformed data
         print(f"Sample data after transformations for {table_name}:")
         filtered_df.show(5, truncate=False)
+        print(f"Row count after transformations: {filtered_df.count()}")
 
         # Convert to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
@@ -130,6 +132,11 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
                     for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
+
+        # Debug: Before Redshift write
+        print(f"Preparing to write to Redshift table {table_name}...")
+        print(f"DynamicFrame schema: {mapped_frame.schema()}")
+        print(f"DynamicFrame row count: {mapped_frame.count()}")
 
         # Write to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(

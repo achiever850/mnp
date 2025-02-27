@@ -14,6 +14,7 @@ args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 ## Configurations
 s3_certificateapps_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/certificateapplications/"
 redshift_connection = "hcd_dev_redshift_connection"
+redshift_tmp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"  # Reinstated
 redshift_database = "hcd-dev-db"
 redshift_certificateapps_table = "usastaffing_staging.certificateapplication"
 
@@ -76,7 +77,7 @@ certificateapps_schema = StructType([
 ])
 
 ## Process data function (identical to certificate)
-def process_data(input_path, schema, table_name, connection):
+def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
         df = spark.read.option("header", "true") \
@@ -129,7 +130,7 @@ def process_data(input_path, schema, table_name, connection):
                     for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Write to Redshift (removed redshift_temp_dir)
+        # Write to Redshift with redshift_tmp_dir in connection_options
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
@@ -137,7 +138,8 @@ def process_data(input_path, schema, table_name, connection):
                 "dbtable": table_name,
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
-                "createTableIfNotExists": "false"
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": temp_dir  # Moved to connection_options
             }
         )
         print(f"Data successfully loaded into {table_name}")
@@ -149,7 +151,7 @@ def process_data(input_path, schema, table_name, connection):
 ## Process certificateapplication data
 process_data(
     s3_certificateapps_input_path, certificateapps_schema, redshift_certificateapps_table,
-    redshift_connection
+    redshift_connection, redshift_tmp_dir
 )
 
 ## Commit the job

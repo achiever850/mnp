@@ -14,7 +14,7 @@ args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 ## Configurations
 s3_certificateapps_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/certificateapplications/"
 redshift_connection = "hcd_dev_redshift_connection"
-redshift_tmp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_certificateapps_table = "usastaffing_staging.certificateapplication"
 
@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (with enhanced debugging)
+## Process data function (exact match to certificate)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -90,26 +90,18 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.printSchema()
         print(f"Sample data for {table_name} (raw):")
         df.show(5, truncate=False)
-        raw_count = df.count()
-        print(f"Row count before filter: {raw_count}")
+        print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter for NOT NULL columns
+        # Hardcoded filter for certificateapplication (updated for NOT NULL columns)
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & 
-            (col("rankingListId").isNotNull()) & 
-            (col("applicationId").isNotNull()) & 
-            (col("listApplicationId").isNotNull()) & 
-            (col("rankOrder").isNotNull())
+            (col("rankingListId").isNotNull())
         )
 
         # Debug: Check filtered data
         print(f"Sample data after filter for {table_name}:")
         filtered_df.show(5, truncate=False)
-        filtered_count = filtered_df.count()
-        print(f"Row count after filter: {filtered_count}")
-
-        if filtered_count == 0:
-            raise ValueError(f"No rows remain after filtering for {table_name}. Check CSV for NOT NULL columns: tenantId, rankingListId, applicationId, listApplicationId, rankOrder.")
+        print(f"Row count after filter: {filtered_df.count()}")
 
         # Transform timestamp columns
         timestamp_columns = ["startDateTime", "addedDateTime", "auditDateTime", "certifiedDateTime",
@@ -130,23 +122,16 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Debug: Final transformed data
         print(f"Sample data after transformations for {table_name}:")
         filtered_df.show(5, truncate=False)
-        print(f"Row count after transformations: {filtered_df.count()}")
 
         # Convert to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
 
         # Explicit mapping to enforce schema
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
-                    for field in schema.fields]
+                    for field in certificateapps_schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Debug: Check DynamicFrame schema and sample
-        print(f"DynamicFrame schema for {table_name}:")
-        print(mapped_frame.schema())
-        print(f"DynamicFrame row count: {mapped_frame.count()}")
-
         # Write to Redshift
-        print(f"Attempting to write to Redshift table {table_name}...")
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
@@ -167,7 +152,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 ## Process certificateapplication data
 process_data(
     s3_certificateapps_input_path, certificateapps_schema, redshift_certificateapps_table,
-    redshift_connection, redshift_tmp_dir
+    redshift_connection, redshift_temp_dir
 )
 
 ## Commit the job

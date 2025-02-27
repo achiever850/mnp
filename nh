@@ -5,7 +5,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
-from pyspark.sql.functions import col, to_timestamp, when
+from pyspark.sql.functions import col, to_timestamp, when, trim
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType
 
 ## Get job parameters
@@ -16,7 +16,7 @@ s3_newhires_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
-redshift_newhires_table = "usastaffing_staging.newhire"  # Singular as per DDL
+redshift_newhires_table = "usastaffing_staging.newhire"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -80,15 +80,15 @@ newhires_schema = StructType([
     StructField("dutyLocationCountry", StringType(), True),
     StructField("positionDescriptionNumber", StringType(), True),
     StructField("positionDescriptionTitle", StringType(), True),
-    StructField("positionDescriptionPayPlan", StringType(), True),
     StructField("positionDescriptionSeries", StringType(), True),
+    StructField("positionDescriptionPayPlan", StringType(), True),
     StructField("positionDescriptionGrade", StringType(), True),
     StructField("payPlanSeriesGrade", StringType(), True),
     StructField("lastUpdatedDateTime", TimestampType(), True),
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate)
+## Process data function (exact match to certificate with trim and debug)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -115,6 +115,13 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         filtered_df.show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 
+        # Trim whitespace from positionDescriptionSeries
+        filtered_df = filtered_df.withColumn("positionDescriptionSeries", trim(col("positionDescriptionSeries")))
+
+        # Debug: Check positionDescriptionSeries around row 326 (offset 325, 5 rows)
+        print(f"positionDescriptionSeries values around row 326 (before transformations):")
+        filtered_df.select("positionDescriptionSeries").limit(5).offset(325).show(truncate=False)
+
         # Transform timestamp columns
         timestamp_columns = [
             "creationDate", "effectiveDateofAppointment", "projectedStartDate", "actualStartDate",
@@ -135,6 +142,8 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Debug: Final transformed data
         print(f"Sample data after transformations for {table_name}:")
         filtered_df.show(5, truncate=False)
+        print(f"positionDescriptionSeries values around row 326 (after transformations):")
+        filtered_df.select("positionDescriptionSeries").limit(5).offset(325).show(truncate=False)
 
         # Convert to DynamicFrame
         dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")

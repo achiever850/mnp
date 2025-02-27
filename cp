@@ -14,7 +14,7 @@ args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 ## Configurations
 s3_certificateapps_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/certificateapplications/"
 redshift_connection = "hcd_dev_redshift_connection"
-redshift_tmp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"  # Reinstated
+redshift_tmp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_certificateapps_table = "usastaffing_staging.certificateapplication"
 
@@ -25,12 +25,12 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define certificateapplication schema (aligned with Redshift DDL)
+## Define certificateapplication schema (aligned with updated Redshift DDL)
 certificateapps_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("rankingListId", IntegerType(), False),
-    StructField("applicationId", LongType(), True),
-    StructField("listApplicationId", LongType(), True),
+    StructField("applicationId", LongType(), False),  # Updated to NOT NULL
+    StructField("listApplicationId", LongType(), False),  # Updated to NOT NULL
     StructField("applicationNumber", StringType(), True),
     StructField("firstName", StringType(), True),
     StructField("middleName", StringType(), True),
@@ -39,7 +39,7 @@ certificateapps_schema = StructType([
     StructField("applicationName", StringType(), True),
     StructField("startDateTime", TimestampType(), True),
     StructField("priorityDescription", StringType(), True),
-    StructField("rankOrder", IntegerType(), True),
+    StructField("rankOrder", IntegerType(), False),  # Updated to NOT NULL
     StructField("rating", StringType(), True),
     StructField("recordStatusCode", StringType(), True),
     StructField("recordStatusCodeDescription", StringType(), True),
@@ -76,7 +76,7 @@ certificateapps_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (identical to certificate)
+## Process data function (with table existence check)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -92,9 +92,13 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
 
-        # Hardcoded filter for certificateapplication
+        # Hardcoded filter for certificateapplication, updated for NOT NULL columns
         filtered_df = df.filter(
-            (col("tenantId").isNotNull()) & (col("rankingListId").isNotNull())
+            (col("tenantId").isNotNull()) & 
+            (col("rankingListId").isNotNull()) & 
+            (col("applicationId").isNotNull()) & 
+            (col("listApplicationId").isNotNull()) & 
+            (col("rankOrder").isNotNull())
         )
 
         # Debug: Check filtered data
@@ -127,10 +131,29 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
 
         # Explicit mapping to enforce schema
         mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
-                    for field in certificateapps_schema.fields]
+                    for field in schema.fields]
         mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
 
-        # Write to Redshift with redshift_tmp_dir in connection_options
+        # Check if table exists in Redshift
+        check_query = f"""
+            SELECT COUNT(*) 
+            FROM information_schema.tables 
+            WHERE table_schema = 'usastaffing_staging' 
+            AND table_name = 'certificateapplication'
+        """
+        check_df = glueContext.read.format("jdbc") \
+            .option("url", "jdbc:redshift://<your-redshift-endpoint>:5439/{redshift_database}".format(redshift_database=redshift_database)) \
+            .option("driver", "com.amazon.redshift.jdbc.Driver") \
+            .option("query", check_query) \
+            .option("user", "<your-redshift-username>") \
+            .option("password", "<your-redshift-password>") \
+            .load()
+        
+        table_exists = check_df.collect()[0][0] > 0
+        if not table_exists:
+            raise ValueError(f"Table {table_name} does not exist in Redshift. Aborting job.")
+
+        # Write to Redshift
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=mapped_frame,
             catalog_connection=connection,
@@ -138,8 +161,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "dbtable": table_name,
                 "database": redshift_database,
                 "preactions": f"TRUNCATE TABLE {table_name}",
-                "createTableIfNotExists": "false",
-                "redshiftTmpDir": temp_dir  # Moved to connection_options
+                "redshiftTmpDir": temp_dir
             }
         )
         print(f"Data successfully loaded into {table_name}")

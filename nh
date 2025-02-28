@@ -5,7 +5,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
-from pyspark.sql.functions import col, to_timestamp, when, regexp_replace, substring, length
+from pyspark.sql.functions import col, to_timestamp, when, regexp_replace, substring, length, lit
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType
 
 ## Get job parameters
@@ -25,7 +25,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define newhire schema (aligned with Redshift DDL)
+## Define newhire schema (aligned with Redshift DDL, corrected column names)
 newhires_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("newHireId", LongType(), False),
@@ -70,6 +70,9 @@ newhires_schema = StructType([
     StructField("agencyDepartmentState", StringType(), True),
     StructField("agencyDepartmentZipCode", StringType(), True),
     StructField("agencyDepartmentCountry", StringType(), True),
+    StructField("agencyDepartmentAddressLine1", StringType(), True),  # Corrected
+    StructField("agencyDepartmentAddressLine2", StringType(), True),  # Corrected
+    StructField("agencyDepartmentAddressLine3", StringType(), True),  # Corrected
     StructField("dutyLocationAddressLine1", StringType(), True),
     StructField("dutyLocationAddressLine2", StringType(), True),
     StructField("dutyLocationCity", StringType(), True),
@@ -94,9 +97,10 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             .schema(schema) \
             .csv(input_path)
         
-        # Debug: Verify DataFrame
+        # Debug: Verify DataFrame and available columns
         print(f"Schema for {table_name}:")
         df.printSchema()
+        print(f"Available columns in DataFrame: {df.columns}")
         print(f"Sample data for {table_name} (raw):")
         df.show(5, truncate=False)
         print(f"Row count before filter: {df.count()}")
@@ -107,51 +111,92 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             (col("newHireId").isNotNull())
         )
 
+        # Check if columns exist before applying transformations
+        available_cols = [col.lower() for col in filtered_df.columns]
+        
         # Clean columns: Remove whitespace, truncate only where DDL is VARCHAR(10)
-        filtered_df = filtered_df.withColumn(
-            "positionDescriptionGrade", substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)  # VARCHAR(10)
-        ).withColumn(
-            "positionDescriptionPayPlan", substring(regexp_replace(col("positionDescriptionPayPlan"), r"\s+", ""), 1, 10)  # VARCHAR(10)
-        ).withColumn(
-            "positionDescriptionSeries", substring(regexp_replace(col("positionDescriptionSeries"), r"\s+", ""), 1, 10)  # VARCHAR(10)
-        ).withColumn(
-            "agencyDepartmentAddress1", regexp_replace(col("agencyDepartmentAddress1"), r"\s+$", "")  # VARCHAR(150), trim trailing only
-        ).withColumn(
-            "agencyDepartmentAddress2", regexp_replace(col("agencyDepartmentAddress2"), r"\s+$", "")  # VARCHAR(150), trim trailing only
-        ).withColumn(
-            "agencyDepartmentAddress3", regexp_replace(col("agencyDepartmentAddress3"), r"\s+$", "")  # VARCHAR(150), trim trailing only
-        ).withColumn(
-            "agencyDepartmentCity", regexp_replace(col("agencyDepartmentCity"), r"\s+$", "")  # VARCHAR(150), trim trailing only
-        ).withColumn(
-            "agencyDepartmentState", regexp_replace(col("agencyDepartmentState"), r"\s+", "")  # VARCHAR(50)
-        ).withColumn(
-            "agencyDepartmentZipCode", regexp_replace(col("agencyDepartmentZipCode"), r"\s+", "")  # VARCHAR(50)
-        ).withColumn(
-            "agencyDepartmentCountry", regexp_replace(col("agencyDepartmentCountry"), r"\s+$", "")  # VARCHAR(150), trim trailing only
-        ).withColumn(
-            "dutyLocationAddressLine1", regexp_replace(col("dutyLocationAddressLine1"), r"\s+$", "")  # VARCHAR(300), trim trailing only
-        ).withColumn(
-            "dutyLocationAddressLine2", regexp_replace(col("dutyLocationAddressLine2"), r"\s+$", "")  # VARCHAR(300), trim trailing only
-        ).withColumn(
-            "dutyLocationCity", regexp_replace(col("dutyLocationCity"), r"\s+$", "")  # VARCHAR(100), trim trailing only
-        ).withColumn(
-            "dutyLocationState", regexp_replace(col("dutyLocationState"), r"\s+", "")  # VARCHAR(50)
-        ).withColumn(
-            "dutyLocationCountry", regexp_replace(col("dutyLocationCountry"), r"\s+$", "")  # VARCHAR(100), trim trailing only
-        ).withColumn(
-            "positionDescriptionNumber", regexp_replace(col("positionDescriptionNumber"), r"\s+$", "")  # VARCHAR(500), trim trailing only
-        ).withColumn(
-            "positionDescriptionTitle", regexp_replace(col("positionDescriptionTitle"), r"\s+$", "")  # VARCHAR(200), trim trailing only
-        ).withColumn(
-            "payPlanSeriesGrade", regexp_replace(col("payPlanSeriesGrade"), r"\s+", "")  # VARCHAR(20)
-        )
+        if "positiondescriptiongrade" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "positionDescriptionGrade", substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)
+            )
+        if "positiondescriptionpayplan" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "positionDescriptionPayPlan", substring(regexp_replace(col("positionDescriptionPayPlan"), r"\s+", ""), 1, 10)
+            )
+        if "positiondescriptionseries" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "positionDescriptionSeries", substring(regexp_replace(col("positionDescriptionSeries"), r"\s+", ""), 1, 10)
+            )
+        if "agencydepartmentaddressline1" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentAddressLine1", regexp_replace(col("agencyDepartmentAddressLine1"), r"\s+$", "")
+            )
+        if "agencydepartmentaddressline2" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentAddressLine2", regexp_replace(col("agencyDepartmentAddressLine2"), r"\s+$", "")
+            )
+        if "agencydepartmentaddressline3" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentAddressLine3", regexp_replace(col("agencyDepartmentAddressLine3"), r"\s+$", "")
+            )
+        if "agencydepartmentcity" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentCity", regexp_replace(col("agencyDepartmentCity"), r"\s+$", "")
+            )
+        if "agencydepartmentstate" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentState", regexp_replace(col("agencyDepartmentState"), r"\s+", "")
+            )
+        if "agencydepartmentzipcode" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentZipCode", regexp_replace(col("agencyDepartmentZipCode"), r"\s+", "")
+            )
+        if "agencydepartmentcountry" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "agencyDepartmentCountry", regexp_replace(col("agencyDepartmentCountry"), r"\s+$", "")
+            )
+        if "dutylocationaddressline1" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "dutyLocationAddressLine1", regexp_replace(col("dutyLocationAddressLine1"), r"\s+$", "")
+            )
+        if "dutylocationaddressline2" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "dutyLocationAddressLine2", regexp_replace(col("dutyLocationAddressLine2"), r"\s+$", "")
+            )
+        if "dutylocationcity" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "dutyLocationCity", regexp_replace(col("dutyLocationCity"), r"\s+$", "")
+            )
+        if "dutylocationstate" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "dutyLocationState", regexp_replace(col("dutyLocationState"), r"\s+", "")
+            )
+        if "dutylocationcountry" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "dutyLocationCountry", regexp_replace(col("dutyLocationCountry"), r"\s+$", "")
+            )
+        if "positiondescriptionnumber" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "positionDescriptionNumber", regexp_replace(col("positionDescriptionNumber"), r"\s+$", "")
+            )
+        if "positiondescriptiontitle" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "positionDescriptionTitle", regexp_replace(col("positionDescriptionTitle"), r"\s+$", "")
+            )
+        if "payplanseriesgrade" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "payPlanSeriesGrade", regexp_replace(col("payPlanSeriesGrade"), r"\s+", "")
+            )
 
         # Debug: Check filtered data with lengths for affected columns
         print(f"Sample data after filter for {table_name} (with lengths):")
         filtered_df.select(
-            "agencyDepartmentAddress1", length("agencyDepartmentAddress1").alias("addr1_len"),
-            "agencyDepartmentAddress2", length("agencyDepartmentAddress2").alias("addr2_len"),
-            "agencyDepartmentAddress3", length("agencyDepartmentAddress3").alias("addr3_len"),
+            "agencyDepartmentAddressLine1" if "agencydepartmentaddressline1" in available_cols else lit(None).alias("agencyDepartmentAddressLine1"),
+            length("agencyDepartmentAddressLine1").alias("addr1_len") if "agencydepartmentaddressline1" in available_cols else lit(None).alias("addr1_len"),
+            "agencyDepartmentAddressLine2" if "agencydepartmentaddressline2" in available_cols else lit(None).alias("agencyDepartmentAddressLine2"),
+            length("agencyDepartmentAddressLine2").alias("addr2_len") if "agencydepartmentaddressline2" in available_cols else lit(None).alias("addr2_len"),
+            "agencyDepartmentAddressLine3" if "agencydepartmentaddressline3" in available_cols else lit(None).alias("agencyDepartmentAddressLine3"),
+            length("agencyDepartmentAddressLine3").alias("addr3_len") if "agencydepartmentaddressline3" in available_cols else lit(None).alias("addr3_len"),
             "agencyDepartmentCity", length("agencyDepartmentCity").alias("city_len"),
             "agencyDepartmentState", length("agencyDepartmentState").alias("dept_state_len"),
             "agencyDepartmentZipCode", length("agencyDepartmentZipCode").alias("zip_len"),

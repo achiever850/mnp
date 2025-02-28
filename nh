@@ -5,7 +5,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
-from pyspark.sql.functions import col, to_timestamp, when
+from pyspark.sql.functions import col, to_timestamp, when, trim
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType
 
 ## Get job parameters
@@ -85,7 +85,7 @@ newhires_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate)
+## Process data function (exact match to certificate with trim fix)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -106,6 +106,9 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             (col("tenantId").isNotNull()) & 
             (col("newHireId").isNotNull())
         )
+
+        # Trim whitespace from positionDescriptionGrade to fix length issue
+        filtered_df = filtered_df.withColumn("positionDescriptionGrade", trim(col("positionDescriptionGrade")))
 
         # Debug: Check filtered data
         print(f"Sample data after filter for {table_name}:")

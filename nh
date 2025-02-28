@@ -5,7 +5,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
-from pyspark.sql.functions import col, to_timestamp, when, trim
+from pyspark.sql.functions import col, to_timestamp, when, regexp_replace, substring, length
 from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType
 
 ## Get job parameters
@@ -85,7 +85,7 @@ newhires_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate with trim fix)
+## Process data function (exact match to certificate with enhanced fix)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -107,12 +107,18 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             (col("newHireId").isNotNull())
         )
 
-        # Trim whitespace from positionDescriptionGrade to fix length issue
-        filtered_df = filtered_df.withColumn("positionDescriptionGrade", trim(col("positionDescriptionGrade")))
+        # Aggressive cleaning: Remove all whitespace and truncate to 10 chars
+        filtered_df = filtered_df.withColumn(
+            "positionDescriptionGrade",
+            substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)
+        )
 
-        # Debug: Check filtered data
-        print(f"Sample data after filter for {table_name}:")
-        filtered_df.show(5, truncate=False)
+        # Debug: Check filtered data with length
+        print(f"Sample data after filter for {table_name} (with positionDescriptionGrade length):")
+        filtered_df.select(
+            "positionDescriptionGrade",
+            length("positionDescriptionGrade").alias("grade_length")
+        ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 
         # Transform timestamp columns

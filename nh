@@ -107,17 +107,22 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             (col("newHireId").isNotNull())
         )
 
-        # Aggressive cleaning: Remove all whitespace and truncate to 10 chars
+        # Aggressive cleaning: Remove all whitespace and truncate to 10 chars for both columns
         filtered_df = filtered_df.withColumn(
             "positionDescriptionGrade",
             substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)
+        ).withColumn(
+            "positionDescriptionPayPlan",
+            substring(regexp_replace(col("positionDescriptionPayPlan"), r"\s+", ""), 1, 10)
         )
 
-        # Debug: Check filtered data with length
-        print(f"Sample data after filter for {table_name} (with positionDescriptionGrade length):")
+        # Debug: Check filtered data with lengths
+        print(f"Sample data after filter for {table_name} (with lengths):")
         filtered_df.select(
             "positionDescriptionGrade",
-            length("positionDescriptionGrade").alias("grade_length")
+            length("positionDescriptionGrade").alias("grade_length"),
+            "positionDescriptionPayPlan",
+            length("positionDescriptionPayPlan").alias("payplan_length")
         ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 

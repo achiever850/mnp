@@ -85,7 +85,7 @@ newhires_schema = StructType([
     StructField("dwLastModifiedDateTime", TimestampType(), True)
 ])
 
-## Process data function (exact match to certificate with enhanced fix)
+## Process data function (exact match to certificate with fixes)
 def process_data(input_path, schema, table_name, connection, temp_dir):
     try:
         # Read the CSV into a DataFrame
@@ -107,57 +107,83 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             (col("newHireId").isNotNull())
         )
 
-        # Aggressive cleaning: Remove all whitespace and truncate to 10 chars for all seven columns
+        # Clean columns: Remove whitespace, truncate only where DDL is VARCHAR(10)
         filtered_df = filtered_df.withColumn(
-            "positionDescriptionGrade",
-            substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)
+            "positionDescriptionGrade", substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)  # VARCHAR(10)
         ).withColumn(
-            "positionDescriptionPayPlan",
-            substring(regexp_replace(col("positionDescriptionPayPlan"), r"\s+", ""), 1, 10)
+            "positionDescriptionPayPlan", substring(regexp_replace(col("positionDescriptionPayPlan"), r"\s+", ""), 1, 10)  # VARCHAR(10)
         ).withColumn(
-            "dutyLocationState",
-            substring(regexp_replace(col("dutyLocationState"), r"\s+", ""), 1, 10)
+            "positionDescriptionSeries", substring(regexp_replace(col("positionDescriptionSeries"), r"\s+", ""), 1, 10)  # VARCHAR(10)
         ).withColumn(
-            "agencyDepartmentState",
-            substring(regexp_replace(col("agencyDepartmentState"), r"\s+", ""), 1, 10)
+            "agencyDepartmentAddress1", regexp_replace(col("agencyDepartmentAddress1"), r"\s+$", "")  # VARCHAR(150), trim trailing only
         ).withColumn(
-            "positionDescriptionSeries",
-            substring(regexp_replace(col("positionDescriptionSeries"), r"\s+", ""), 1, 10)
+            "agencyDepartmentAddress2", regexp_replace(col("agencyDepartmentAddress2"), r"\s+$", "")  # VARCHAR(150), trim trailing only
         ).withColumn(
-            "agencyDepartmentZipCode",
-            substring(regexp_replace(col("agencyDepartmentZipCode"), r"\s+", ""), 1, 10)
+            "agencyDepartmentAddress3", regexp_replace(col("agencyDepartmentAddress3"), r"\s+$", "")  # VARCHAR(150), trim trailing only
         ).withColumn(
-            "payPlanSeriesGrade",
-            substring(regexp_replace(col("payPlanSeriesGrade"), r"\s+", ""), 1, 10)
+            "agencyDepartmentCity", regexp_replace(col("agencyDepartmentCity"), r"\s+$", "")  # VARCHAR(150), trim trailing only
+        ).withColumn(
+            "agencyDepartmentState", regexp_replace(col("agencyDepartmentState"), r"\s+", "")  # VARCHAR(50)
+        ).withColumn(
+            "agencyDepartmentZipCode", regexp_replace(col("agencyDepartmentZipCode"), r"\s+", "")  # VARCHAR(50)
+        ).withColumn(
+            "agencyDepartmentCountry", regexp_replace(col("agencyDepartmentCountry"), r"\s+$", "")  # VARCHAR(150), trim trailing only
+        ).withColumn(
+            "dutyLocationAddressLine1", regexp_replace(col("dutyLocationAddressLine1"), r"\s+$", "")  # VARCHAR(300), trim trailing only
+        ).withColumn(
+            "dutyLocationAddressLine2", regexp_replace(col("dutyLocationAddressLine2"), r"\s+$", "")  # VARCHAR(300), trim trailing only
+        ).withColumn(
+            "dutyLocationCity", regexp_replace(col("dutyLocationCity"), r"\s+$", "")  # VARCHAR(100), trim trailing only
+        ).withColumn(
+            "dutyLocationState", regexp_replace(col("dutyLocationState"), r"\s+", "")  # VARCHAR(50)
+        ).withColumn(
+            "dutyLocationCountry", regexp_replace(col("dutyLocationCountry"), r"\s+$", "")  # VARCHAR(100), trim trailing only
+        ).withColumn(
+            "positionDescriptionNumber", regexp_replace(col("positionDescriptionNumber"), r"\s+$", "")  # VARCHAR(500), trim trailing only
+        ).withColumn(
+            "positionDescriptionTitle", regexp_replace(col("positionDescriptionTitle"), r"\s+$", "")  # VARCHAR(200), trim trailing only
+        ).withColumn(
+            "payPlanSeriesGrade", regexp_replace(col("payPlanSeriesGrade"), r"\s+", "")  # VARCHAR(20)
         )
 
-        # Debug: Check filtered data with lengths
+        # Debug: Check filtered data with lengths for affected columns
         print(f"Sample data after filter for {table_name} (with lengths):")
         filtered_df.select(
-            "positionDescriptionGrade",
-            length("positionDescriptionGrade").alias("grade_length"),
-            "positionDescriptionPayPlan",
-            length("positionDescriptionPayPlan").alias("payplan_length"),
-            "dutyLocationState",
-            length("dutyLocationState").alias("state_length"),
-            "agencyDepartmentState",
-            length("agencyDepartmentState").alias("dept_state_length"),
-            "positionDescriptionSeries",
-            length("positionDescriptionSeries").alias("series_length"),
-            "agencyDepartmentZipCode",
-            length("agencyDepartmentZipCode").alias("zip_length"),
-            "payPlanSeriesGrade",
-            length("payPlanSeriesGrade").alias("pay_grade_length")
+            "agencyDepartmentAddress1", length("agencyDepartmentAddress1").alias("addr1_len"),
+            "agencyDepartmentAddress2", length("agencyDepartmentAddress2").alias("addr2_len"),
+            "agencyDepartmentAddress3", length("agencyDepartmentAddress3").alias("addr3_len"),
+            "agencyDepartmentCity", length("agencyDepartmentCity").alias("city_len"),
+            "agencyDepartmentState", length("agencyDepartmentState").alias("dept_state_len"),
+            "agencyDepartmentZipCode", length("agencyDepartmentZipCode").alias("zip_len"),
+            "agencyDepartmentCountry", length("agencyDepartmentCountry").alias("country_len"),
+            "dutyLocationAddressLine1", length("dutyLocationAddressLine1").alias("duty_addr1_len"),
+            "dutyLocationAddressLine2", length("dutyLocationAddressLine2").alias("duty_addr2_len"),
+            "dutyLocationCity", length("dutyLocationCity").alias("duty_city_len"),
+            "dutyLocationState", length("dutyLocationState").alias("duty_state_len"),
+            "dutyLocationCountry", length("dutyLocationCountry").alias("duty_country_len"),
+            "positionDescriptionNumber", length("positionDescriptionNumber").alias("pd_num_len"),
+            "positionDescriptionTitle", length("positionDescriptionTitle").alias("pd_title_len"),
+            "positionDescriptionPayPlan", length("positionDescriptionPayPlan").alias("payplan_len"),
+            "positionDescriptionSeries", length("positionDescriptionSeries").alias("series_len"),
+            "positionDescriptionGrade", length("positionDescriptionGrade").alias("grade_len"),
+            "payPlanSeriesGrade", length("payPlanSeriesGrade").alias("pay_grade_len"),
+            "lastUpdatedDateTime",
+            "dwLastModifiedDateTime"
         ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 
-        # Transform timestamp columns
+        # Transform timestamp columns with flexible parsing
         timestamp_columns = [
             "creationDate", "effectiveDateofAppointment", "projectedStartDate", "actualStartDate",
             "firstLoggedInDate", "lastLoggedInDate", "lastUpdatedDateTime", "dwLastModifiedDateTime"
         ]
         for ts_col in timestamp_columns:
-            filtered_df = filtered_df.withColumn(ts_col, to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+            filtered_df = filtered_df.withColumn(
+                ts_col,
+                when(to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").isNotNull(),
+                     to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+                .otherwise(to_timestamp(col(ts_col), "yyyy-MM-dd HH:mm:ss"))
+            )
 
         # Cast boolean fields
         boolean_cols = ["eVerifyFlag", "pcsEligibleFlag"]

@@ -107,7 +107,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             (col("newHireId").isNotNull())
         )
 
-        # Aggressive cleaning: Remove all whitespace and truncate to 10 chars for all three columns
+        # Aggressive cleaning: Remove all whitespace and truncate to 10 chars for all seven columns
         filtered_df = filtered_df.withColumn(
             "positionDescriptionGrade",
             substring(regexp_replace(col("positionDescriptionGrade"), r"\s+", ""), 1, 10)
@@ -117,6 +117,18 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         ).withColumn(
             "dutyLocationState",
             substring(regexp_replace(col("dutyLocationState"), r"\s+", ""), 1, 10)
+        ).withColumn(
+            "agencyDepartmentState",
+            substring(regexp_replace(col("agencyDepartmentState"), r"\s+", ""), 1, 10)
+        ).withColumn(
+            "positionDescriptionSeries",
+            substring(regexp_replace(col("positionDescriptionSeries"), r"\s+", ""), 1, 10)
+        ).withColumn(
+            "agencyDepartmentZipCode",
+            substring(regexp_replace(col("agencyDepartmentZipCode"), r"\s+", ""), 1, 10)
+        ).withColumn(
+            "payPlanSeriesGrade",
+            substring(regexp_replace(col("payPlanSeriesGrade"), r"\s+", ""), 1, 10)
         )
 
         # Debug: Check filtered data with lengths
@@ -127,7 +139,15 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             "positionDescriptionPayPlan",
             length("positionDescriptionPayPlan").alias("payplan_length"),
             "dutyLocationState",
-            length("dutyLocationState").alias("state_length")
+            length("dutyLocationState").alias("state_length"),
+            "agencyDepartmentState",
+            length("agencyDepartmentState").alias("dept_state_length"),
+            "positionDescriptionSeries",
+            length("positionDescriptionSeries").alias("series_length"),
+            "agencyDepartmentZipCode",
+            length("agencyDepartmentZipCode").alias("zip_length"),
+            "payPlanSeriesGrade",
+            length("payPlanSeriesGrade").alias("pay_grade_length")
         ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 

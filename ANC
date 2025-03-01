@@ -89,76 +89,108 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         # Check if columns exist before applying transformations
         available_cols = [col.lower() for col in filtered_df.columns]
         
-        # Clean columns: Remove whitespace and truncate to DDL lengths
+        # Clean columns: Replace "NULL" with "null", remove whitespace, and truncate to DDL lengths
         if "announcementnumber" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "announcementNumber", substring(regexp_replace(col("announcementNumber"), r"\s+$", ""), 1, 200)
+                "announcementNumber",
+                when(col("announcementNumber") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("announcementNumber"), r"\s+$", ""), 1, 200))
             )
         if "announcementstatus" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "announcementStatus", substring(regexp_replace(col("announcementStatus"), r"\s+$", ""), 1, 200)
+                "announcementStatus",
+                when(col("announcementStatus") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("announcementStatus"), r"\s+$", ""), 1, 200))
             )
         if "announcementtemplate" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "announcementTemplate", substring(regexp_replace(col("announcementTemplate"), r"\s+$", ""), 1, 1000)
+                "announcementTemplate",
+                when(col("announcementTemplate") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("announcementTemplate"), r"\s+$", ""), 1, 1000))
             )
         if "salarytype" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "salaryType", substring(regexp_replace(col("salaryType"), r"\s+$", ""), 1, 50)
+                "salaryType",
+                when(col("salaryType") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("salaryType"), r"\s+$", ""), 1, 50))
             )
         if "nottoexceed" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "notToExceed", substring(regexp_replace(col("notToExceed"), r"\s+$", ""), 1, 50)
+                "notToExceed",
+                when(col("notToExceed") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("notToExceed"), r"\s+$", ""), 1, 50))
             )
         if "totalopenings" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "totalOpenings", substring(regexp_replace(col("totalOpenings"), r"\s+$", ""), 1, 20)
+                "totalOpenings",
+                when(col("totalOpenings") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("totalOpenings"), r"\s+$", ""), 1, 20))
             )
         if "externalcontactname" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "externalContactName", substring(regexp_replace(col("externalContactName"), r"\s+$", ""), 1, 500)
+                "externalContactName",
+                when(col("externalContactName") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("externalContactName"), r"\s+$", ""), 1, 500))
             )
         if "externalcontactemail" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "externalContactEmail", substring(regexp_replace(col("externalContactEmail"), r"\s+$", ""), 1, 500)
+                "externalContactEmail",
+                when(col("externalContactEmail") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("externalContactEmail"), r"\s+$", ""), 1, 500))
             )
         if "internalcontactname" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "internalContactName", substring(regexp_replace(col("internalContactName"), r"\s+$", ""), 1, 120)
+                "internalContactName",
+                when(col("internalContactName") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("internalContactName"), r"\s+$", ""), 1, 120))
             )
         if "internalcontactemail" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "internalContactEmail", substring(regexp_replace(col("internalContactEmail"), r"\s+$", ""), 1, 500)
+                "internalContactEmail",
+                when(col("internalContactEmail") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("internalContactEmail"), r"\s+$", ""), 1, 500))
             )
         if "linkedusajobscontrolnumber" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "linkedUSAJOBSControlNumber", substring(regexp_replace(col("linkedUSAJOBSControlNumber"), r"\s+$", ""), 1, 256)
+                "linkedUSAJOBSControlNumber",
+                when(col("linkedUSAJOBSControlNumber") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("linkedUSAJOBSControlNumber"), r"\s+$", ""), 1, 256))
             )
         if "whomayapply" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "whoMayApply", substring(regexp_replace(col("whoMayApply"), r"\s+$", ""), 1, 500)
+                "whoMayApply",
+                when(col("whoMayApply") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("whoMayApply"), r"\s+$", ""), 1, 500))
             )
         if "whomayapplyoverridetext" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "whoMayApplyOverrideText", substring(regexp_replace(col("whoMayApplyOverrideText"), r"\s+$", ""), 1, 1000)
+                "whoMayApplyOverrideText",
+                when(col("whoMayApplyOverrideText") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("whoMayApplyOverrideText"), r"\s+$", ""), 1, 1000))
             )
         if "remotejobclarificationtext" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "remoteJobClarificationText", substring(regexp_replace(col("remoteJobClarificationText"), r"\s+$", ""), 1, 1000)
+                "remoteJobClarificationText",
+                when(col("remoteJobClarificationText") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("remoteJobClarificationText"), r"\s+$", ""), 1, 1000))
             )
         if "appointmenttypeoverridetext" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "appointmentTypeOverrideText", substring(regexp_replace(col("appointmentTypeOverrideText"), r"\s+$", ""), 1, 1000)
+                "appointmentTypeOverrideText",
+                when(col("appointmentTypeOverrideText") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("appointmentTypeOverrideText"), r"\s+$", ""), 1, 1000))
             )
         if "promotionpotential" in available_cols:
             filtered_df = filtered_df.withColumn(
                 "promotionPotential",
-                when(col("promotionPotential").isin("nu", "NU", "null", "NULL", ""), None)  # Convert "nu" and variants to NULL
+                when(col("promotionPotential") == "NULL", "null")
                     .otherwise(substring(regexp_replace(col("promotionPotential"), r"\s+", ""), 1, 2))
             )
         if "usajobsjobstatus" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "usajobsJobStatus", substring(regexp_replace(col("usajobsJobStatus"), r"\s+$", ""), 1, 500)
+                "usajobsJobStatus",
+                when(col("usajobsJobStatus") == "NULL", "null")
+                    .otherwise(substring(regexp_replace(col("usajobsJobStatus"), r"\s+$", ""), 1, 500))
             )
 
         # Debug: Check filtered data with lengths

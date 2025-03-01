@@ -152,7 +152,9 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             )
         if "promotionpotential" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "promotionPotential", substring(regexp_replace(col("promotionPotential"), r"\s+", ""), 1, 2)
+                "promotionPotential",
+                when(col("promotionPotential").isin("nu", "NU", "null", "NULL", ""), None)  # Convert "nu" and variants to NULL
+                    .otherwise(substring(regexp_replace(col("promotionPotential"), r"\s+", ""), 1, 2))
             )
         if "usajobsjobstatus" in available_cols:
             filtered_df = filtered_df.withColumn(

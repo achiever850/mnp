@@ -1,0 +1,260 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp, when, regexp_replace, substring, length, lit
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, BooleanType, TimestampType, FloatType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_announcements_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_announcements_table = "usastaffing_staging.announcement"
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define announcements schema (exactly matching CSV and Redshift DDL order)
+announcements_schema = StructType([
+    StructField("tenantId", IntegerType(), False),
+    StructField("announcementId", LongType(), False),
+    StructField("announcementNumber", StringType(), False),
+    StructField("announcementStatus", StringType(), True),
+    StructField("announcementTemplate", StringType(), True),
+    StructField("salaryType", StringType(), True),
+    StructField("minimumSalary", FloatType(), True),
+    StructField("maximumSalary", FloatType(), True),
+    StructField("notToExceed", StringType(), True),
+    StructField("totalOpenings", StringType(), True),
+    StructField("openDate", TimestampType(), False),
+    StructField("closeDate", TimestampType(), False),
+    StructField("releasedFlag", BooleanType(), True),
+    StructField("releasedDateTime", TimestampType(), True),
+    StructField("applicationLimitSetFlag", BooleanType(), True),
+    StructField("applicationLimit", IntegerType(), True),
+    StructField("displayDefaultBenefitsTextFlag", BooleanType(), True),
+    StructField("externalContactId", LongType(), True),
+    StructField("externalContactName", StringType(), True),
+    StructField("externalContactEmail", StringType(), True),
+    StructField("internalContactId", LongType(), True),
+    StructField("internalContactName", StringType(), True),
+    StructField("internalContactEmail", StringType(), True),
+    StructField("usajobsControlNumber", LongType(), True),
+    StructField("linkedUSAJOBSControlNumber", StringType(), True),
+    StructField("whoMayApply", StringType(), True),
+    StructField("whoMayApplyOverrideText", StringType(), True),
+    StructField("remoteJobClarificationText", StringType(), True),
+    StructField("appointmentTypeOverrideText", StringType(), True),
+    StructField("promotionPotential", StringType(), True),
+    StructField("usajobsJobStatus", StringType(), True),
+    StructField("lastModifiedDateTime", TimestampType(), True),
+    StructField("dwLastModifiedDateTime", TimestampType(), True)
+])
+
+## Process data function (adapted for announcements)
+def process_data(input_path, schema, table_name, connection, temp_dir):
+    try:
+        # Read the CSV into a DataFrame
+        df = spark.read.option("header", "true") \
+            .option("delimiter", ",") \
+            .schema(schema) \
+            .csv(input_path)
+        
+        # Debug: Verify DataFrame and available columns
+        print(f"Schema for {table_name}:")
+        df.printSchema()
+        print(f"Available columns in DataFrame: {df.columns}")
+        print(f"Sample data for {table_name} (raw):")
+        df.show(5, truncate=False)
+        print(f"Row count before filter: {df.count()}")
+
+        # Hardcoded filter for announcements (non-null required fields)
+        filtered_df = df.filter(
+            (col("tenantId").isNotNull()) & 
+            (col("announcementId").isNotNull()) &
+            (col("announcementNumber").isNotNull()) &
+            (col("openDate").isNotNull()) &
+            (col("closeDate").isNotNull())
+        )
+
+        # Check if columns exist before applying transformations
+        available_cols = [col.lower() for col in filtered_df.columns]
+        
+        # Clean string columns: Remove whitespace and truncate to DDL lengths
+        if "announcementnumber" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "announcementNumber", substring(regexp_replace(col("announcementNumber"), r"\s+$", ""), 1, 200)
+            )
+        if "announcementstatus" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "announcementStatus", substring(regexp_replace(col("announcementStatus"), r"\s+$", ""), 1, 200)
+            )
+        if "announcementtemplate" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "announcementTemplate", substring(regexp_replace(col("announcementTemplate"), r"\s+$", ""), 1, 1000)
+            )
+        if "salarytype" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "salaryType", substring(regexp_replace(col("salaryType"), r"\s+$", ""), 1, 50)
+            )
+        if "nottoexceed" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "notToExceed", substring(regexp_replace(col("notToExceed"), r"\s+$", ""), 1, 50)
+            )
+        if "totalopenings" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "totalOpenings", substring(regexp_replace(col("totalOpenings"), r"\s+$", ""), 1, 20)
+            )
+        if "externalcontactname" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "externalContactName", substring(regexp_replace(col("externalContactName"), r"\s+$", ""), 1, 500)
+            )
+        if "externalcontactemail" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "externalContactEmail", substring(regexp_replace(col("externalContactEmail"), r"\s+$", ""), 1, 500)
+            )
+        if "internalcontactname" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "internalContactName", substring(regexp_replace(col("internalContactName"), r"\s+$", ""), 1, 120)
+            )
+        if "internalcontactemail" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "internalContactEmail", substring(regexp_replace(col("internalContactEmail"), r"\s+$", ""), 1, 500)
+            )
+        if "linkedusajobscontrolnumber" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "linkedUSAJOBSControlNumber", substring(regexp_replace(col("linkedUSAJOBSControlNumber"), r"\s+$", ""), 1, 256)
+            )
+        if "whomayapply" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "whoMayApply", substring(regexp_replace(col("whoMayApply"), r"\s+$", ""), 1, 500)
+            )
+        if "whomayapplyoverridetext" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "whoMayApplyOverrideText", substring(regexp_replace(col("whoMayApplyOverrideText"), r"\s+$", ""), 1, 1000)
+            )
+        if "remotejobclarificationtext" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "remoteJobClarificationText", substring(regexp_replace(col("remoteJobClarificationText"), r"\s+$", ""), 1, 1000)
+            )
+        if "appointmenttypeoverridetext" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "appointmentTypeOverrideText", substring(regexp_replace(col("appointmentTypeOverrideText"), r"\s+$", ""), 1, 1000)
+            )
+        if "promotionpotential" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "promotionPotential", substring(regexp_replace(col("promotionPotential"), r"\s+$", ""), 1, 2)
+            )
+        if "usajobsjobstatus" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "usajobsJobStatus", substring(regexp_replace(col("usajobsJobStatus"), r"\s+$", ""), 1, 500)
+            )
+
+        # Debug: Check filtered data with lengths
+        print(f"Sample data after filter for {table_name} (with lengths):")
+        filtered_df.select(
+            "tenantId",
+            "announcementId",
+            "announcementNumber", length("announcementNumber").alias("ann_num_len"),
+            "announcementStatus", length("announcementStatus").alias("status_len"),
+            "announcementTemplate", length("announcementTemplate").alias("template_len"),
+            "salaryType", length("salaryType").alias("salary_type_len"),
+            "minimumSalary",
+            "maximumSalary",
+            "notToExceed", length("notToExceed").alias("nte_len"),
+            "totalOpenings", length("totalOpenings").alias("openings_len"),
+            "openDate",
+            "closeDate",
+            "releasedFlag",
+            "releasedDateTime",
+            "applicationLimitSetFlag",
+            "applicationLimit",
+            "displayDefaultBenefitsTextFlag",
+            "externalContactId",
+            "externalContactName", length("externalContactName").alias("ext_name_len"),
+            "externalContactEmail", length("externalContactEmail").alias("ext_email_len"),
+            "internalContactId",
+            "internalContactName", length("internalContactName").alias("int_name_len"),
+            "internalContactEmail", length("internalContactEmail").alias("int_email_len"),
+            "usajobsControlNumber",
+            "linkedUSAJOBSControlNumber", length("linkedUSAJOBSControlNumber").alias("linked_usajobs_len"),
+            "whoMayApply", length("whoMayApply").alias("who_may_len"),
+            "whoMayApplyOverrideText", length("whoMayApplyOverrideText").alias("who_override_len"),
+            "remoteJobClarificationText", length("remoteJobClarificationText").alias("remote_text_len"),
+            "appointmentTypeOverrideText", length("appointmentTypeOverrideText").alias("appt_override_len"),
+            "promotionPotential", length("promotionPotential").alias("promo_len"),
+            "usajobsJobStatus", length("usajobsJobStatus").alias("usajobs_status_len"),
+            "lastModifiedDateTime",
+            "dwLastModifiedDateTime"
+        ).show(5, truncate=False)
+        print(f"Row count after filter: {filtered_df.count()}")
+
+        # Transform timestamp columns with flexible parsing
+        timestamp_columns = [
+            "openDate", "closeDate", "releasedDateTime", 
+            "lastModifiedDateTime", "dwLastModifiedDateTime"
+        ]
+        for ts_col in timestamp_columns:
+            filtered_df = filtered_df.withColumn(
+                ts_col,
+                when(to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").isNotNull(),
+                     to_timestamp(col(ts_col), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+                .otherwise(to_timestamp(col(ts_col), "yyyy-MM-dd HH:mm:ss"))
+            )
+
+        # Cast boolean fields
+        boolean_cols = ["releasedFlag", "applicationLimitSetFlag", "displayDefaultBenefitsTextFlag"]
+        for b_col in boolean_cols:
+            filtered_df = filtered_df.withColumn(b_col, when(col(b_col) == "true", True)
+                                                .when(col(b_col) == "false", False)
+                                                .otherwise(None).cast(BooleanType()))
+
+        # Debug: Final transformed data
+        print(f"Sample data after transformations for {table_name}:")
+        filtered_df.show(5, truncate=False)
+
+        # Convert to DynamicFrame
+        dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
+
+        # Explicit mapping to enforce schema
+        mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
+                    for field in schema.fields]
+        mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
+
+        # Write to Redshift
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=mapped_frame,
+            catalog_connection=connection,
+            connection_options={
+                "dbtable": table_name,
+                "database": redshift_database,
+                "preactions": f"TRUNCATE TABLE {table_name}",
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": temp_dir
+            }
+        )
+        print(f"Data successfully loaded into {table_name}")
+        
+    except Exception as e:
+        print(f"Error processing {table_name}: {str(e)}")
+        raise
+
+## Process announcements data
+process_data(
+    s3_announcements_input_path, announcements_schema, redshift_announcements_table,
+    redshift_connection, redshift_temp_dir
+)
+
+## Commit the job
+job.commit()

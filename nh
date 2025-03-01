@@ -188,7 +188,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "payPlanSeriesGrade", substring(regexp_replace(col("payPlanSeriesGrade"), r"\s+", ""), 1, 20)
             )
 
-        # Debug: Check filtered data with lengths for affected columns
+        # Debug: Check filtered data with focus on agencyDepartmentCity and agencyDepartmentAddressLine1
         print(f"Sample data after filter for {table_name} (with lengths):")
         filtered_df.select(
             "agencyDepartmentAddressLine1" if "agencydepartmentaddressline1" in available_cols else lit(None).alias("agencyDepartmentAddressLine1"),
@@ -217,11 +217,12 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 
-        # Validate agencyDepartmentState length before Redshift load
-        oversized_states = filtered_df.filter(length(col("agencyDepartmentState")) > 50)
-        if oversized_states.count() > 0:
-            print("WARNING: Found agencyDepartmentState values exceeding 50 characters:")
-            oversized_states.select("agencyDepartmentState", length("agencyDepartmentState").alias("state_length")).show(truncate=False)
+        # Validate agencyDepartmentCity and agencyDepartmentAddressLine1 mapping
+        print(f"Checking agencyDepartmentCity and agencyDepartmentAddressLine1 mapping:")
+        filtered_df.select(
+            "agencyDepartmentCity", 
+            "agencyDepartmentAddressLine1"
+        ).show(5, truncate=False)
 
         # Transform timestamp columns with flexible parsing
         timestamp_columns = [

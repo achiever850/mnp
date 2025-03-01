@@ -12,7 +12,7 @@ from pyspark.sql.types import StructType, StructField, IntegerType, LongType, St
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_announcements_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/announcements/"
+s3_announcements_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/"  # Adjust file name if needed (e.g., announcements.csv)
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
@@ -25,7 +25,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define announcements schema (exactly matching CSV and Redshift DDL order)
+## Define announcements schema (exactly matching Redshift DDL order)
 announcements_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("announcementId", LongType(), False),
@@ -37,8 +37,8 @@ announcements_schema = StructType([
     StructField("maximumSalary", FloatType(), True),
     StructField("notToExceed", StringType(), True),
     StructField("totalOpenings", StringType(), True),
-    StructField("openDate", TimestampType(), False),
-    StructField("closeDate", TimestampType(), False),
+    StructField("openDate", TimestampType(), True),
+    StructField("closeDate", TimestampType(), True),
     StructField("releasedFlag", BooleanType(), True),
     StructField("releasedDateTime", TimestampType(), True),
     StructField("applicationLimitSetFlag", BooleanType(), True),
@@ -58,8 +58,8 @@ announcements_schema = StructType([
     StructField("appointmentTypeOverrideText", StringType(), True),
     StructField("promotionPotential", StringType(), True),
     StructField("usajobsJobStatus", StringType(), True),
-    StructField("lastModifiedDateTime", TimestampType(), True),
-    StructField("dwLastModifiedDateTime", TimestampType(), True)
+    StructField("lastmodifieddateTime", TimestampType(), True),
+    StructField("dwLastmodifieddateTime", TimestampType(), True)
 ])
 
 ## Process data function (adapted for announcements)
@@ -83,15 +83,13 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         filtered_df = df.filter(
             (col("tenantId").isNotNull()) & 
             (col("announcementId").isNotNull()) &
-            (col("announcementNumber").isNotNull()) &
-            (col("openDate").isNotNull()) &
-            (col("closeDate").isNotNull())
+            (col("announcementNumber").isNotNull())
         )
 
         # Check if columns exist before applying transformations
         available_cols = [col.lower() for col in filtered_df.columns]
         
-        # Clean string columns: Remove whitespace and truncate to DDL lengths
+        # Clean columns: Remove whitespace and truncate to DDL lengths
         if "announcementnumber" in available_cols:
             filtered_df = filtered_df.withColumn(
                 "announcementNumber", substring(regexp_replace(col("announcementNumber"), r"\s+$", ""), 1, 200)
@@ -154,7 +152,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             )
         if "promotionpotential" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "promotionPotential", substring(regexp_replace(col("promotionPotential"), r"\s+$", ""), 1, 2)
+                "promotionPotential", substring(regexp_replace(col("promotionPotential"), r"\s+", ""), 1, 2)
             )
         if "usajobsjobstatus" in available_cols:
             filtered_df = filtered_df.withColumn(
@@ -166,7 +164,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
         filtered_df.select(
             "tenantId",
             "announcementId",
-            "announcementNumber", length("announcementNumber").alias("ann_num_len"),
+            "announcementNumber", length("announcementNumber").alias("num_len"),
             "announcementStatus", length("announcementStatus").alias("status_len"),
             "announcementTemplate", length("announcementTemplate").alias("template_len"),
             "salaryType", length("salaryType").alias("salary_type_len"),
@@ -189,21 +187,21 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             "internalContactEmail", length("internalContactEmail").alias("int_email_len"),
             "usajobsControlNumber",
             "linkedUSAJOBSControlNumber", length("linkedUSAJOBSControlNumber").alias("linked_usajobs_len"),
-            "whoMayApply", length("whoMayApply").alias("who_may_len"),
+            "whoMayApply", length("whoMayApply").alias("who_len"),
             "whoMayApplyOverrideText", length("whoMayApplyOverrideText").alias("who_override_len"),
-            "remoteJobClarificationText", length("remoteJobClarificationText").alias("remote_text_len"),
-            "appointmentTypeOverrideText", length("appointmentTypeOverrideText").alias("appt_override_len"),
+            "remoteJobClarificationText", length("remoteJobClarificationText").alias("remote_len"),
+            "appointmentTypeOverrideText", length("appointmentTypeOverrideText").alias("appt_type_len"),
             "promotionPotential", length("promotionPotential").alias("promo_len"),
-            "usajobsJobStatus", length("usajobsJobStatus").alias("usajobs_status_len"),
-            "lastModifiedDateTime",
-            "dwLastModifiedDateTime"
+            "usajobsJobStatus", length("usajobsJobStatus").alias("job_status_len"),
+            "lastmodifieddateTime",
+            "dwLastmodifieddateTime"
         ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")
 
         # Transform timestamp columns with flexible parsing
         timestamp_columns = [
             "openDate", "closeDate", "releasedDateTime", 
-            "lastModifiedDateTime", "dwLastModifiedDateTime"
+            "lastmodifieddateTime", "dwLastmodifieddateTime"
         ]
         for ts_col in timestamp_columns:
             filtered_df = filtered_df.withColumn(

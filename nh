@@ -25,7 +25,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-## Define newhire schema (aligned with Redshift DDL)
+## Define newhire schema (exactly matching CSV and Redshift DDL order)
 newhires_schema = StructType([
     StructField("tenantId", IntegerType(), False),
     StructField("newHireId", LongType(), False),
@@ -66,13 +66,13 @@ newhires_schema = StructType([
     StructField("branchOrganization", StringType(), True),
     StructField("bureauDivision", StringType(), True),
     StructField("agencyDepartment", StringType(), True),
+    StructField("agencyDepartmentAddressLine1", StringType(), True),
+    StructField("agencyDepartmentAddressLine2", StringType(), True),
+    StructField("agencyDepartmentAddressLine3", StringType(), True),
     StructField("agencyDepartmentCity", StringType(), True),
     StructField("agencyDepartmentState", StringType(), True),
     StructField("agencyDepartmentZipCode", StringType(), True),
     StructField("agencyDepartmentCountry", StringType(), True),
-    StructField("agencyDepartmentAddressLine1", StringType(), True),
-    StructField("agencyDepartmentAddressLine2", StringType(), True),
-    StructField("agencyDepartmentAddressLine3", StringType(), True),
     StructField("dutyLocationAddressLine1", StringType(), True),
     StructField("dutyLocationAddressLine2", StringType(), True),
     StructField("dutyLocationCity", StringType(), True),
@@ -80,8 +80,8 @@ newhires_schema = StructType([
     StructField("dutyLocationCountry", StringType(), True),
     StructField("positionDescriptionNumber", StringType(), True),
     StructField("positionDescriptionTitle", StringType(), True),
-    StructField("positionDescriptionSeries", StringType(), True),
     StructField("positionDescriptionPayPlan", StringType(), True),
+    StructField("positionDescriptionSeries", StringType(), True),
     StructField("positionDescriptionGrade", StringType(), True),
     StructField("payPlanSeriesGrade", StringType(), True),
     StructField("lastUpdatedDateTime", TimestampType(), True),
@@ -188,7 +188,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 "payPlanSeriesGrade", substring(regexp_replace(col("payPlanSeriesGrade"), r"\s+", ""), 1, 20)
             )
 
-        # Debug: Check filtered data with focus on agencyDepartmentCity and agencyDepartmentAddressLine1
+        # Debug: Check filtered data with focus on agencyDepartment fields
         print(f"Sample data after filter for {table_name} (with lengths):")
         filtered_df.select(
             "agencyDepartmentAddressLine1" if "agencydepartmentaddressline1" in available_cols else lit(None).alias("agencyDepartmentAddressLine1"),

@@ -12,7 +12,7 @@ from pyspark.sql.types import StructType, StructField, IntegerType, LongType, St
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-s3_newhire_auth_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/newHireAppointingAuthorities/newHireAppointingAuthorities.csv"  # Adjust if file name differs
+s3_newhire_auth_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/newHireAppointingAuthorities/newHireAppointingAuthorities.csv"  # Adjust file name if needed
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
@@ -31,7 +31,7 @@ newhire_auth_schema = StructType([
     StructField("newhireid", LongType(), False),
     StructField("tagid", LongType(), False),
     StructField("appointingauthority", StringType(), True),
-    StructField("appointingauthoritylevel", StringType(), True),
+    StructField("appointingauthorityTaglevel", StringType(), True),
     StructField("dwlastmodifieddatetime", TimestampType(), True)
 ])
 
@@ -69,11 +69,11 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
                 when(col("appointingauthority").isin("NULL", "nu"), "null")
                     .otherwise(substring(regexp_replace(col("appointingauthority"), r"\s+$", ""), 1, 100))
             )
-        if "appointingauthoritylevel" in available_cols:
+        if "appointingauthoritytaglevel" in available_cols:
             filtered_df = filtered_df.withColumn(
-                "appointingauthoritylevel",
-                when(col("appointingauthoritylevel").isin("NULL", "nu"), "null")
-                    .otherwise(substring(regexp_replace(col("appointingauthoritylevel"), r"\s+$", ""), 1, 50))
+                "appointingauthorityTaglevel",
+                when(col("appointingauthorityTaglevel").isin("NULL", "nu"), "null")
+                    .otherwise(substring(regexp_replace(col("appointingauthorityTaglevel"), r"\s+$", ""), 1, 50))
             )
 
         # Transform timestamp column with flexible parsing
@@ -92,7 +92,7 @@ def process_data(input_path, schema, table_name, connection, temp_dir):
             "newhireid",
             "tagid",
             "appointingauthority", length("appointingauthority").alias("auth_len"),
-            "appointingauthoritylevel", length("appointingauthoritylevel").alias("auth_level_len"),
+            "appointingauthorityTaglevel", length("appointingauthorityTaglevel").alias("taglevel_len"),
             "dwlastmodifieddatetime"
         ).show(5, truncate=False)
         print(f"Row count after filter: {filtered_df.count()}")

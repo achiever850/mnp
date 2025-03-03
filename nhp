@@ -1,0 +1,137 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+from pyspark.sql.functions import col, to_timestamp, when, regexp_replace, substring, length, lit
+from pyspark.sql.types import StructType, StructField, IntegerType, LongType, StringType, TimestampType
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+s3_newhire_auth_input_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/newHireAppointingAuthorities/newHireAppointingAuthorities.csv"  # Adjust if file name differs
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_newhire_auth_table = "usastaffing_staging.newHireAppointingAuthorities"
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Define newHireAppointingAuthorities schema (exactly matching Redshift DDL order)
+newhire_auth_schema = StructType([
+    StructField("tenantid", IntegerType(), False),
+    StructField("newhireid", LongType(), False),
+    StructField("tagid", LongType(), False),
+    StructField("appointingauthority", StringType(), True),
+    StructField("appointingauthoritylevel", StringType(), True),
+    StructField("dwlastmodifieddatetime", TimestampType(), True)
+])
+
+## Process data function (adapted for newHireAppointingAuthorities)
+def process_data(input_path, schema, table_name, connection, temp_dir):
+    try:
+        # Read the CSV into a DataFrame
+        df = spark.read.option("header", "true") \
+            .option("delimiter", ",") \
+            .schema(schema) \
+            .csv(input_path)
+        
+        # Debug: Verify DataFrame and available columns
+        print(f"Schema for {table_name}:")
+        df.printSchema()
+        print(f"Available columns in DataFrame: {df.columns}")
+        print(f"Sample data for {table_name} (raw):")
+        df.show(5, truncate=False)
+        print(f"Row count before filter: {df.count()}")
+
+        # Hardcoded filter for newHireAppointingAuthorities (non-null required fields)
+        filtered_df = df.filter(
+            (col("tenantid").isNotNull()) & 
+            (col("newhireid").isNotNull()) &
+            (col("tagid").isNotNull())
+        )
+
+        # Check if columns exist before applying transformations
+        available_cols = [col.lower() for col in filtered_df.columns]
+        
+        # Clean string columns: Replace "NULL" and "nu" with "null", remove whitespace, and truncate to DDL lengths
+        if "appointingauthority" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "appointingauthority",
+                when(col("appointingauthority").isin("NULL", "nu"), "null")
+                    .otherwise(substring(regexp_replace(col("appointingauthority"), r"\s+$", ""), 1, 100))
+            )
+        if "appointingauthoritylevel" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "appointingauthoritylevel",
+                when(col("appointingauthoritylevel").isin("NULL", "nu"), "null")
+                    .otherwise(substring(regexp_replace(col("appointingauthoritylevel"), r"\s+$", ""), 1, 50))
+            )
+
+        # Transform timestamp column with flexible parsing
+        if "dwlastmodifieddatetime" in available_cols:
+            filtered_df = filtered_df.withColumn(
+                "dwlastmodifieddatetime",
+                when(to_timestamp(col("dwlastmodifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").isNotNull(),
+                     to_timestamp(col("dwlastmodifieddatetime"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS"))
+                .otherwise(to_timestamp(col("dwlastmodifieddatetime"), "yyyy-MM-dd HH:mm:ss"))
+            )
+
+        # Debug: Check filtered data with lengths
+        print(f"Sample data after filter for {table_name} (with lengths):")
+        filtered_df.select(
+            "tenantid",
+            "newhireid",
+            "tagid",
+            "appointingauthority", length("appointingauthority").alias("auth_len"),
+            "appointingauthoritylevel", length("appointingauthoritylevel").alias("auth_level_len"),
+            "dwlastmodifieddatetime"
+        ).show(5, truncate=False)
+        print(f"Row count after filter: {filtered_df.count()}")
+
+        # Debug: Final transformed data
+        print(f"Sample data after transformations for {table_name}:")
+        filtered_df.show(5, truncate=False)
+
+        # Convert to DynamicFrame
+        dynamic_frame = DynamicFrame.fromDF(filtered_df, glueContext, f"{table_name}_redshift_frame")
+
+        # Explicit mapping to enforce schema
+        mappings = [(field.name, field.dataType.simpleString(), field.name, field.dataType.simpleString()) 
+                    for field in schema.fields]
+        mapped_frame = ApplyMapping.apply(frame=dynamic_frame, mappings=mappings)
+
+        # Write to Redshift
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=mapped_frame,
+            catalog_connection=connection,
+            connection_options={
+                "dbtable": table_name,
+                "database": redshift_database,
+                "preactions": f"TRUNCATE TABLE {table_name}",
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": temp_dir
+            }
+        )
+        print(f"Data successfully loaded into {table_name}")
+        
+    except Exception as e:
+        print(f"Error processing {table_name}: {str(e)}")
+        raise
+
+## Process newHireAppointingAuthorities data
+process_data(
+    s3_newhire_auth_input_path, newhire_auth_schema, redshift_newhire_auth_table,
+    redshift_connection, redshift_temp_dir
+)
+
+## Commit the job
+job.commit()

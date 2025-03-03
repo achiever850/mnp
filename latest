@@ -1,0 +1,79 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.context import SparkContext
+
+## Get job parameters
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+## Configurations
+S3_PATH = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/newhire.csv"  # Updated to newhire.csv
+REDSHIFT_CONNECTION = "hcd_dev_redshift_connection"
+REDSHIFT_TEMP_DIR = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+REDSHIFT_DATABASE = "hcd-dev-db"
+REDSHIFT_TABLE = "usastaffing_staging.newhire"  # Updated to newhire
+TABLE_NAME = "newhire"  # Singular as requested
+
+## Initialize contexts
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+## Helper functions
+def read_from_s3(glue_context, s3_path, table_name):
+    try:
+        dynamic_frame = glue_context.create_dynamic_frame.from_options(
+            format_options={"header": True, "delimiter": ","},
+            connection_type="s3",
+            format="csv",
+            connection_options={"paths": [s3_path], "recurse": True}
+        )
+        print(f"Schema inferred for {table_name}:")
+        dynamic_frame.printSchema()
+        print(f"Sample data for {table_name} (raw):")
+        dynamic_frame.show(5)
+        print(f"Row count for {table_name}: {dynamic_frame.count()}")
+        return dynamic_frame
+    except Exception as e:
+        print(f"Error reading S3 data for {table_name}: {str(e)}")
+        raise
+
+def write_to_redshift(glue_context, dynamic_frame, redshift_table, table_name, connection, temp_dir, database):
+    try:
+        glue_context.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection=connection,
+            connection_options={
+                "dbtable": redshift_table,
+                "database": database,
+                "preactions": f"TRUNCATE TABLE {redshift_table}",
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": temp_dir
+            }
+        )
+        print(f"Data successfully loaded into {redshift_table}")
+    except Exception as e:
+        print(f"Error writing to Redshift for {table_name}: {str(e)}")
+        raise
+
+## Main processing
+try:
+    print(f"Starting processing for {TABLE_NAME}...")
+    
+    # Read data from S3
+    dynamic_frame = read_from_s3(glueContext, S3_PATH, TABLE_NAME)
+    
+    # Write to Redshift
+    write_to_redshift(glueContext, dynamic_frame, REDSHIFT_TABLE, TABLE_NAME, REDSHIFT_CONNECTION, REDSHIFT_TEMP_DIR, REDSHIFT_DATABASE)
+
+except Exception as e:
+    print(f"Failed to process {TABLE_NAME}: {str(e)}")
+    raise  # Raise to fail the job and log the error; remove 'raise' to silently fail if preferred
+
+## Commit the job
+job.commit()

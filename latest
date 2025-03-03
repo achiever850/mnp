@@ -5,16 +5,17 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.context import SparkContext
+from pyspark.sql.functions import col
 
 ## Get job parameters
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-S3_PATH = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/newhire.csv"  # Verify this file exists
+S3_PATH = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/newhire.csv"
 REDSHIFT_CONNECTION = "hcd_dev_redshift_connection"
 REDSHIFT_TEMP_DIR = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 REDSHIFT_DATABASE = "hcd-dev-db"
-REDSHIFT_TABLE = "usastaffing_staging.newhire"  # Verify this table exists
+REDSHIFT_TABLE = "usastaffing_staging.newhire"
 TABLE_NAME = "newhire"
 
 ## Initialize contexts
@@ -36,7 +37,7 @@ def read_from_s3(glue_context, s3_path, table_name):
         print(f"Schema inferred for {table_name}:")
         dynamic_frame.printSchema()
         print(f"Sample data for {table_name} (raw):")
-        dynamic_frame.show(5)  # Show raw data
+        dynamic_frame.show(5)
         row_count = dynamic_frame.count()
         print(f"Row count for {table_name} after reading: {row_count}")
         if row_count == 0:
@@ -46,9 +47,25 @@ def read_from_s3(glue_context, s3_path, table_name):
         print(f"Error reading S3 data for {table_name}: {str(e)}")
         raise
 
+def filter_required_fields(dynamic_frame, required_fields, table_name):
+    try:
+        df = dynamic_frame.toDF()
+        filter_conditions = [col(field).isNotNull() for field in required_fields]
+        filtered_df = df.filter(*filter_conditions)
+        filtered_frame = DynamicFrame.fromDF(filtered_df, glue_context, f"{table_name}_filtered")
+        row_count = filtered_frame.count()
+        print(f"Row count for {table_name} after filtering required fields: {row_count}")
+        if row_count == 0:
+            print(f"WARNING: No rows remain after filtering - all rows may have NULL in required fields: {required_fields}")
+        print(f"Sample data for {table_name} after filtering:")
+        filtered_frame.show(5)
+        return filtered_frame
+    except Exception as e:
+        print(f"Error filtering data for {table_name}: {str(e)}")
+        raise
+
 def write_to_redshift(glue_context, dynamic_frame, redshift_table, table_name, connection, temp_dir, database):
     try:
-        # Check data before writing
         row_count_before_write = dynamic_frame.count()
         print(f"Row count for {table_name} before writing to Redshift: {row_count_before_write}")
         if row_count_before_write == 0:
@@ -77,12 +94,16 @@ try:
     # Read data from S3
     dynamic_frame = read_from_s3(glueContext, S3_PATH, TABLE_NAME)
     
+    # Filter rows with NOT NULL fields (adjust based on actual DDL)
+    required_fields = ["tenantId", "newHireId"]  # Assumed - update with actual NOT NULL columns
+    filtered_frame = filter_required_fields(dynamic_frame, required_fields, TABLE_NAME)
+    
     # Write to Redshift
-    write_to_redshift(glueContext, dynamic_frame, REDSHIFT_TABLE, TABLE_NAME, REDSHIFT_CONNECTION, REDSHIFT_TEMP_DIR, REDSHIFT_DATABASE)
+    write_to_redshift(glueContext, filtered_frame, REDSHIFT_TABLE, TABLE_NAME, REDSHIFT_CONNECTION, REDSHIFT_TEMP_DIR, REDSHIFT_DATABASE)
 
 except Exception as e:
     print(f"Failed to process {TABLE_NAME}: {str(e)}")
-    raise  # Keep this to ensure job fails visibly if an error occurs
+    raise
 
 ## Commit the job
 job.commit()

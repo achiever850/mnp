@@ -10,12 +10,12 @@ from pyspark.context import SparkContext
 args = getResolvedOptions(sys.argv, ['JOB_NAME'])
 
 ## Configurations
-S3_PATH = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/newhire.csv"  # Updated to newhire.csv
+S3_PATH = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/newhires/newhire.csv"  # Verify this file exists
 REDSHIFT_CONNECTION = "hcd_dev_redshift_connection"
 REDSHIFT_TEMP_DIR = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 REDSHIFT_DATABASE = "hcd-dev-db"
-REDSHIFT_TABLE = "usastaffing_staging.newhire"  # Updated to newhire
-TABLE_NAME = "newhire"  # Singular as requested
+REDSHIFT_TABLE = "usastaffing_staging.newhire"  # Verify this table exists
+TABLE_NAME = "newhire"
 
 ## Initialize contexts
 sc = SparkContext()
@@ -36,8 +36,11 @@ def read_from_s3(glue_context, s3_path, table_name):
         print(f"Schema inferred for {table_name}:")
         dynamic_frame.printSchema()
         print(f"Sample data for {table_name} (raw):")
-        dynamic_frame.show(5)
-        print(f"Row count for {table_name}: {dynamic_frame.count()}")
+        dynamic_frame.show(5)  # Show raw data
+        row_count = dynamic_frame.count()
+        print(f"Row count for {table_name} after reading: {row_count}")
+        if row_count == 0:
+            print(f"WARNING: No rows read from {s3_path} - file may be empty or headers mismatched")
         return dynamic_frame
     except Exception as e:
         print(f"Error reading S3 data for {table_name}: {str(e)}")
@@ -45,6 +48,12 @@ def read_from_s3(glue_context, s3_path, table_name):
 
 def write_to_redshift(glue_context, dynamic_frame, redshift_table, table_name, connection, temp_dir, database):
     try:
+        # Check data before writing
+        row_count_before_write = dynamic_frame.count()
+        print(f"Row count for {table_name} before writing to Redshift: {row_count_before_write}")
+        if row_count_before_write == 0:
+            print(f"WARNING: No data to write to {redshift_table} - load will complete but table will be empty")
+
         glue_context.write_dynamic_frame.from_jdbc_conf(
             frame=dynamic_frame,
             catalog_connection=connection,
@@ -56,7 +65,7 @@ def write_to_redshift(glue_context, dynamic_frame, redshift_table, table_name, c
                 "redshiftTmpDir": temp_dir
             }
         )
-        print(f"Data successfully loaded into {redshift_table}")
+        print(f"Data successfully loaded into {redshift_table} (check Redshift to confirm row count)")
     except Exception as e:
         print(f"Error writing to Redshift for {table_name}: {str(e)}")
         raise
@@ -73,7 +82,7 @@ try:
 
 except Exception as e:
     print(f"Failed to process {TABLE_NAME}: {str(e)}")
-    raise  # Raise to fail the job and log the error; remove 'raise' to silently fail if preferred
+    raise  # Keep this to ensure job fails visibly if an error occurs
 
 ## Commit the job
 job.commit()

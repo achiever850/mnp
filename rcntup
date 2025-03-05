@@ -16,77 +16,72 @@ job.init(args["JOB_NAME"], args)
 
 # S3 and Redshift Configurations
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
-redshift_connection = "hcd_dev_redshift_connection"  # Glue connection name
+redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# List of Folders (and corresponding Redshift tables) to process
+# List of Folders and Redshift tables (corrected typos)
 folders = [
-    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationID"),
-    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireID"),
-    ("certificateApplicationRankinglistIDs", "certificateapplicationRankinglistID"),
-    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsID"),
-    ("timeToHireAnnouncementIDs", "timtohireannouncementID"),
-    ("timeToHireCustomerIDs", "timtohirecustomerID"),
-    ("timeToHireNewHireIDs", "timtohirenewhireID"),
-    ("timeToHireOfficeIDs", "timtohireofficeID"),
-    ("timeToHireOrganizationIDs", "timtohireorganizationID"),
-    ("timeToHireRequestIDs", "timtohirerequestID"),
-    ("timeToHireVacancyIDs", "timtohirevacancyID")
+    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid"),
+    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid"),
+    ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid"),
+    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsid"),
+    ("timeToHireAnnouncementIDs", "timetohireannouncementid"),  # Fixed typo
+    ("timeToHireCustomerIDs", "timetohirecustomerid"),          # Fixed typo
+    ("timeToHireNewHireIDs", "timetohirenewhireid"),            # Fixed typo
+    ("timeToHireOfficeIDs", "timetohireofficeid"),              # Fixed typo
+    ("timeToHireOrganizationIDs", "timetohireorganizationid"),  # Fixed typo
+    ("timeToHireRequestIDs", "timetohirerequestid"),            # Fixed typo
+    ("timeToHireVacancyIDs", "timetohirevacancyid")             # Fixed typo
 ]
 
 # Process Each Folder
 for folder, redshift_table in folders:
-    print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
-    
-    # Construct the full S3 path to the folder
-    folder_path = f"{s3_path}{folder}/"
-    print(f"Full S3 Folder Path: {folder_path}")
+    try:
+        print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+        
+        # Construct the full S3 path to the folder
+        folder_path = f"{s3_path}{folder}/"
+        print(f"Full S3 Folder Path: {folder_path}")
 
-    # Read CSV from S3
-    dynamic_frame = glueContext.create_dynamic_frame.from_options(
-        connection_type="s3",
-        connection_options={"paths": [folder_path]},
-        format="csv",
-        format_options={"withHeader": True, "separator": ","}
-    )
+        # Read CSV from S3
+        dynamic_frame = glueContext.create_dynamic_frame.from_options(
+            connection_type="s3",
+            connection_options={"paths": [folder_path], "recurse": True},
+            format="csv",
+            format_options={"header": True, "separator": ","}
+        )
 
-    # Convert to DataFrame
-    df = dynamic_frame.toDF()
-    print(f"Schema for {folder}:")
-    df.printSchema()
-    print(f"Sample Data from {folder}:")
-    df.show(5)
+        # Debug output
+        df = dynamic_frame.toDF()
+        print(f"Schema for {folder}:")
+        df.printSchema()
+        print(f"Sample Data from {folder}:")
+        df.show(5)
+        row_count = dynamic_frame.count()
+        print(f"Row count for {folder}: {row_count}")
+        if row_count == 0:
+            print(f"WARNING: No data read from {folder_path}")
 
-    # Truncate the Redshift table before loading new data
-    truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-    print(f"Executing: {truncate_query}")
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database,
-            "preactions": truncate_query
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
+        # Write to Redshift with truncate
+        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
+        print(f"Executing: {truncate_query}")
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": f"{redshift_schema}.{redshift_table}",
+                "database": redshift_database,
+                "preactions": truncate_query
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+        print(f"Data successfully loaded into {redshift_schema}.{redshift_table}")
 
-    # Convert DataFrame back to DynamicFrame
-    transformed_frame = DynamicFrame.fromDF(df, glueContext, "transformed_frame")
-
-    # Write data to Redshift
-    print(f"Writing data to Redshift Table: {redshift_schema}.{redshift_table}")
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=transformed_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": f"{redshift_schema}.{redshift_table}",
-            "database": redshift_database
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
+    except Exception as e:
+        print(f"Error processing {folder}: {str(e)}")
+        continue  # Continue with next folder
 
 # Commit Job
 job.commit()

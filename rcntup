@@ -21,7 +21,7 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# List of Folders and Redshift tables (corrected typos)
+# List of Folders and Redshift tables
 folders = [
     ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid"),
     ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid"),
@@ -45,23 +45,28 @@ for folder, redshift_table in folders:
         folder_path = f"{s3_path}{folder}/"
         print(f"Full S3 Folder Path: {folder_path}")
 
-        # Read CSV from S3
+        # Read CSV from S3 with explicit header handling
         dynamic_frame = glueContext.create_dynamic_frame.from_options(
             connection_type="s3",
             connection_options={"paths": [folder_path], "recurse": True},
             format="csv",
-            format_options={"header": True, "separator": ","}
+            format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
         )
 
-        # Check data after reading
-        print(f"Schema for {folder}:")
+        # Check schema and data after reading
+        print(f"Schema for {folder} after reading:")
         dynamic_frame.printSchema()
         print(f"Sample Data from {folder} (raw):")
         dynamic_frame.show(5)
         row_count_read = dynamic_frame.count()
         print(f"Row count for {folder} after reading: {row_count_read}")
         if row_count_read == 0:
-            print(f"WARNING: No data read from {folder_path} - check folder contents or path")
+            print(f"WARNING: No data read from {folder_path} - check folder contents or CSV format")
+            continue
+
+        # Convert to DataFrame to inspect column names
+        df = dynamic_frame.toDF()
+        print(f"Column names from CSV for {folder}: {df.columns}")
 
         # Write to Redshift with truncate
         full_table_name = f"{redshift_schema}.{redshift_table}"
@@ -77,7 +82,7 @@ for folder, redshift_table in folders:
             },
             redshift_tmp_dir=redshift_temp_dir
         )
-        print(f"Write operation completed for {full_table_name} - verifying data in Redshift next")
+        print(f"Write operation completed for {full_table_name}")
 
     except Exception as e:
         print(f"Error processing {folder}: {str(e)}")

@@ -5,7 +5,6 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import col, lit
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -22,78 +21,76 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# List of Folders and Redshift tables with expected headers
+# List of specific folders and their corresponding Redshift table names (updated for certificateApplicationRequestIDs)
 folders = [
-    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid", ["tenantId", "ca_RankingListId", "ca_ApplicationId", "applicationId"]),
-    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid", ["tenantId", "CA_RankingListId", "CA_ApplicationId", "newhireId"]),
-    ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid", ["tenantId", "CA_RankingListId", "CA_ApplicationId", "rankingListId"]),
-    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsid", ["tenantId", "CA_RankingListId", "CA_ApplicationId", "requestId"]),
-    ("timeToHireAnnouncementIDs", "timetohireannouncementid", ["tenantId", "tthRequestId", "announcementId"]),
-    ("timeToHireCustomerIDs", "timetohirecustomerid", ["tenantId", "tthRequestId", "customerId"]),
-    ("timeToHireNewHireIDs", "timetohirenewhireid", ["tenantId", "tthRequestId", "newHireId"]),
-    ("timeToHireOfficeIDs", "timetohireofficeid", ["tenantId", "tthRequestId", "officeId"]),
-    ("timeToHireOrganizationIDs", "timetohireorganizationid", ["tenantId", "tthRequestId", "orgId"]),
-    ("timeToHireRequestIDs", "timetohirerequestid", ["tenantId", "tthRequestId", "requestId"]),
-    ("timeToHireVacancyIDs", "timetohirevacancyid", ["tenantId", "tthRequestId", "vacancyId"])
+    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid"),
+    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid"),
+    ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid"),
+    ("certificateApplicationRequestIDs", "certificateapplicationrequestid"),  # Updated folder and table name
+    ("timeToHireAnnouncementIDs", "timetohireannouncementid"),
+    ("timeToHireCustomerIDs", "timetohirecustomerid"),
+    ("timeToHireNewHireIDs", "timetohirenewhireid"),
+    ("timeToHireOfficeIDs", "timetohireofficeid"),
+    ("timeToHireOrganizationIDs", "timetohireorganizationid"),
+    ("timeToHireRequestIDs", "timetohirerequestid"),
+    ("timeToHireVacancyIDs", "timetohirevacancyid")
 ]
 
 # Process Each Folder
-for folder, redshift_table, expected_headers in folders:
+for folder, redshift_table in folders:
     try:
         print(f"\nProcessing Folder: {folder} → Redshift Table: {redshift_table}")
         
-        # Construct the full S3 path to the folder
-        folder_path = f"{s3_path}{folder}/"
-        print(f"Full S3 Folder Path: {folder_path}")
-
-        # Read CSV from S3 with explicit header handling
+        # Construct the full S3 path to the folder and file
+        folder_path = f"{s3_path}{folder}/"  # Try folder with CSVs
+        file_path = f"{s3_path}{folder}.csv"  # Try single file as fallback
+        
+        # Try reading from folder (multiple CSVs)
+        print(f"Attempting Folder Path: {folder_path}")
         dynamic_frame = glueContext.create_dynamic_frame.from_options(
             connection_type="s3",
             connection_options={"paths": [folder_path], "recurse": True},
             format="csv",
             format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
         )
+        row_count_folder = dynamic_frame.count()
+        print(f"Row count for {folder} (folder path): {row_count_folder}")
 
-        # Check schema and data after reading
-        print(f"Schema for {folder} after reading:")
-        dynamic_frame.printSchema()
-        print(f"Sample Data from {folder} (raw):")
-        dynamic_frame.show(5)
-        row_count_read = dynamic_frame.count()
-        print(f"Row count for {folder} after reading: {row_count_read}")
-        if row_count_read == 0:
-            print(f"WARNING: No data read from {folder_path} - check folder contents or CSV format")
-            continue
+        if row_count_folder == 0:
+            print(f"WARNING: No data read from folder path {folder_path} - trying single file path")
+            # Try reading from single file
+            print(f"Attempting Single File Path: {file_path}")
+            dynamic_frame = glueContext.create_dynamic_frame.from_options(
+                connection_type="s3",
+                connection_options={"paths": [file_path], "recurse": False},
+                format="csv",
+                format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
+            )
+            row_count_file = dynamic_frame.count()
+            print(f"Row count for {folder} (single file path): {row_count_file}")
+            if row_count_file == 0:
+                print(f"ERROR: No data read from either {folder_path} or {file_path} - skipping {folder}")
+                continue
+            else:
+                print(f"Sample Data from {folder} (single file path):")
+                dynamic_frame.show(5)
+        else:
+            print(f"Sample Data from {folder} (folder path):")
+            dynamic_frame.show(5)
 
-        # Convert to DataFrame to inspect and map column names, and filter out header row if present
+        # Target Redshift Table
+        full_table_name = f"{redshift_schema}.{redshift_table}"
+        print(f"Target Redshift Table: {full_table_name}")
+
+        # Check schema and column names
         df = dynamic_frame.toDF()
         print(f"Column names from CSV for {folder}: {df.columns}")
 
-        # Check if headers are default (col1, col2, ...) and map if necessary
-        if all(col.startswith('col') for col in df.columns):
-            print(f"WARNING: Default column names detected for {folder} - mapping to expected headers: {expected_headers}")
-            if len(df.columns) == len(expected_headers):
-                df = df.toDF(*expected_headers)
-                print(f"Remapped column names to: {df.columns}")
-            else:
-                print(f"ERROR: Number of columns ({len(df.columns)}) does not match expected headers ({len(expected_headers)}) - check CSV")
-                continue
-        else:
-            # Check if the first row matches expected headers (indicating header row as data)
-            first_row = df.limit(1).collect()[0] if df.count() > 0 else None
-            if first_row and all(str(first_row[i]).lower() == str(expected_headers[i]).lower() for i in range(len(expected_headers))):
-                print(f"WARNING: Header row detected as data for {folder} - filtering it out")
-                df = df.filter(~(reduce(lambda x, y: x & y, [col(c).isin([expected_headers[i]]) for i, c in enumerate(df.columns)]))))
-
-        # Convert back to DynamicFrame
-        remapped_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder}_remapped")
-
         # Write to Redshift with truncate
-        full_table_name = f"{redshift_schema}.{redshift_table}"
         truncate_query = f"TRUNCATE TABLE {full_table_name};"
         print(f"Executing truncate: {truncate_query}")
         glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=remapped_dynamic_frame,
+            frame=dynamic_frame,
             catalog_connection=redshift_connection,
             connection_options={
                 "dbtable": full_table_name,

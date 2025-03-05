@@ -21,23 +21,23 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# List of Folders and Redshift tables
+# List of Folders and Redshift tables with expected headers (fixed syntax)
 folders = [
-    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid"),
-    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid"),
-    ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid"),
-    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsid"),
-    ("timeToHireAnnouncementIDs", "timetohireannouncementid"),
-    ("timeToHireCustomerIDs", "timetohirecustomerid"),
-    ("timeToHireNewHireIDs", "timetohirenewhireid"),
-    ("timeToHireOfficeIDs", "timetohireofficeid"),
-    ("timeToHireOrganizationIDs", "timetohireorganizationid"),
-    ("timeToHireRequestIDs", "timetohirerequestid"),
-    ("timeToHireVacancyIDs", "timetohirevacancyid")
+    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid", ["tenantId", "ca_RankingListId", "ca_ApplicationId", "applicationId"]),
+    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid", ["tenantId", "CA_RankingListId", "CA_ApplicationId", "newhireId"]),
+    ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid", ["tenantId", "CA_RankingListId", "CA_ApplicationId", "rankingListId"]),
+    ("certificateApplicationRequestsIDs", "certificateapplicationrequestsid", ["tenantId", "CA_RankingListId", "CA_ApplicationId", "requestId"]),
+    ("timeToHireAnnouncementIDs", "timetohireannouncementid", ["tenantId", "tthRequestId", "announcementId"]),
+    ("timeToHireCustomerIDs", "timetohirecustomerid", ["tenantId", "tthRequestId", "customerId"]),
+    ("timeToHireNewHireIDs", "timetohirenewhireid", ["tenantId", "tthRequestId", "newHireId"]),
+    ("timeToHireOfficeIDs", "timetohireofficeid", ["tenantId", "tthRequestId", "officeId"]),
+    ("timeToHireOrganizationIDs", "timetohireorganizationid", ["tenantId", "tthRequestId", "orgId"]),
+    ("timeToHireRequestIDs", "timetohirerequestid", ["tenantId", "tthRequestId", "requestId"]),
+    ("timeToHireVacancyIDs", "timetohirevacancyid", ["tenantId", "tthRequestId", "vacancyId"])
 ]
 
 # Process Each Folder
-for folder, redshift_table in folders:
+for folder, redshift_table, expected_headers in folders:
     try:
         print(f"\nProcessing Folder: {folder} → Redshift Table: {redshift_table}")
         
@@ -64,16 +64,29 @@ for folder, redshift_table in folders:
             print(f"WARNING: No data read from {folder_path} - check folder contents or CSV format")
             continue
 
-        # Convert to DataFrame to inspect column names
+        # Convert to DataFrame to inspect and map column names
         df = dynamic_frame.toDF()
         print(f"Column names from CSV for {folder}: {df.columns}")
+
+        # Check if headers are default (col1, col2, ...) and map if necessary
+        if all(col.startswith('col') for col in df.columns):
+            print(f"WARNING: Default column names detected for {folder} - mapping to expected headers: {expected_headers}")
+            if len(df.columns) == len(expected_headers):
+                df = df.toDF(*expected_headers)
+                print(f"Remapped column names to: {df.columns}")
+            else:
+                print(f"ERROR: Number of columns ({len(df.columns)}) does not match expected headers ({len(expected_headers)}) - check CSV")
+                continue
+
+        # Convert back to DynamicFrame
+        remapped_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder}_remapped")
 
         # Write to Redshift with truncate
         full_table_name = f"{redshift_schema}.{redshift_table}"
         truncate_query = f"TRUNCATE TABLE {full_table_name};"
         print(f"Executing truncate: {truncate_query}")
         glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame,
+            frame=remapped_dynamic_frame,
             catalog_connection=redshift_connection,
             connection_options={
                 "dbtable": full_table_name,

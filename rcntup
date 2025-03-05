@@ -27,19 +27,19 @@ folders = [
     ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid"),
     ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid"),
     ("certificateApplicationRequestsIDs", "certificateapplicationrequestsid"),
-    ("timeToHireAnnouncementIDs", "timetohireannouncementid"),  # Fixed typo
-    ("timeToHireCustomerIDs", "timetohirecustomerid"),          # Fixed typo
-    ("timeToHireNewHireIDs", "timetohirenewhireid"),            # Fixed typo
-    ("timeToHireOfficeIDs", "timetohireofficeid"),              # Fixed typo
-    ("timeToHireOrganizationIDs", "timetohireorganizationid"),  # Fixed typo
-    ("timeToHireRequestIDs", "timetohirerequestid"),            # Fixed typo
-    ("timeToHireVacancyIDs", "timetohirevacancyid")             # Fixed typo
+    ("timeToHireAnnouncementIDs", "timetohireannouncementid"),
+    ("timeToHireCustomerIDs", "timetohirecustomerid"),
+    ("timeToHireNewHireIDs", "timetohirenewhireid"),
+    ("timeToHireOfficeIDs", "timetohireofficeid"),
+    ("timeToHireOrganizationIDs", "timetohireorganizationid"),
+    ("timeToHireRequestIDs", "timetohirerequestid"),
+    ("timeToHireVacancyIDs", "timetohirevacancyid")
 ]
 
 # Process Each Folder
 for folder, redshift_table in folders:
     try:
-        print(f"Processing Folder: {folder} → Redshift Table: {redshift_table}")
+        print(f"\nProcessing Folder: {folder} → Redshift Table: {redshift_table}")
         
         # Construct the full S3 path to the folder
         folder_path = f"{s3_path}{folder}/"
@@ -53,35 +53,36 @@ for folder, redshift_table in folders:
             format_options={"header": True, "separator": ","}
         )
 
-        # Debug output
-        df = dynamic_frame.toDF()
+        # Check data after reading
         print(f"Schema for {folder}:")
-        df.printSchema()
-        print(f"Sample Data from {folder}:")
-        df.show(5)
-        row_count = dynamic_frame.count()
-        print(f"Row count for {folder}: {row_count}")
-        if row_count == 0:
-            print(f"WARNING: No data read from {folder_path}")
+        dynamic_frame.printSchema()
+        print(f"Sample Data from {folder} (raw):")
+        dynamic_frame.show(5)
+        row_count_read = dynamic_frame.count()
+        print(f"Row count for {folder} after reading: {row_count_read}")
+        if row_count_read == 0:
+            print(f"WARNING: No data read from {folder_path} - check folder contents or path")
 
         # Write to Redshift with truncate
-        truncate_query = f"TRUNCATE TABLE {redshift_schema}.{redshift_table};"
-        print(f"Executing: {truncate_query}")
+        full_table_name = f"{redshift_schema}.{redshift_table}"
+        truncate_query = f"TRUNCATE TABLE {full_table_name};"
+        print(f"Executing truncate: {truncate_query}")
         glueContext.write_dynamic_frame.from_jdbc_conf(
             frame=dynamic_frame,
             catalog_connection=redshift_connection,
             connection_options={
-                "dbtable": f"{redshift_schema}.{redshift_table}",
+                "dbtable": full_table_name,
                 "database": redshift_database,
                 "preactions": truncate_query
             },
             redshift_tmp_dir=redshift_temp_dir
         )
-        print(f"Data successfully loaded into {redshift_schema}.{redshift_table}")
+        print(f"Write operation completed for {full_table_name} - verifying data in Redshift next")
 
     except Exception as e:
         print(f"Error processing {folder}: {str(e)}")
-        continue  # Continue with next folder
+        continue
 
 # Commit Job
+print("\nJob execution completed - committing job")
 job.commit()

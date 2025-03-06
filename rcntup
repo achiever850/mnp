@@ -60,7 +60,7 @@ try:
 
     # Filter out header row if it appears as data
     header_row = [str(h).lower() for h in df.columns]
-    filter_conditions = [col(c).cast("string").lower() != lit(h) for c, h in zip(df.columns, header_row)]
+    filter_conditions = [~col(c).cast("string").lower().isin([h]) for c, h in zip(df.columns, header_row)]
     filter_condition = reduce(lambda x, y: x & y, filter_conditions)
     df = df.filter(filter_condition)
     row_count_after_filter = df.count()

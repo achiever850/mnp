@@ -5,6 +5,8 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.functions import col, lit
+from functools import reduce
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -16,94 +18,79 @@ job.init(args["JOB_NAME"], args)
 
 # S3 and Redshift Configurations
 s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
+folder_name = "certificateApplicationApplicationIDs"
+redshift_table = "certificateApplicationApplicationID"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
+full_table_name = f"{redshift_schema}.{redshift_table}"
 
-# List of specific folders and their corresponding Redshift table names (updated for certificateApplicationRequestIDs)
-folders = [
-    ("certificateApplicationApplicationIDs", "certificateapplicationapplicationid"),
-    ("certificateApplicationNewHireIDs", "certificateapplicationnewhireid"),
-    ("certificateApplicationRankinglistIDs", "certificateapplicationrankinglistid"),
-    ("certificateApplicationRequestIDs", "certificateapplicationrequestid"),  # Updated folder and table name
-    ("timeToHireAnnouncementIDs", "timetohireannouncementid"),
-    ("timeToHireCustomerIDs", "timetohirecustomerid"),
-    ("timeToHireNewHireIDs", "timetohirenewhireid"),
-    ("timeToHireOfficeIDs", "timetohireofficeid"),
-    ("timeToHireOrganizationIDs", "timetohireorganizationid"),
-    ("timeToHireRequestIDs", "timetohirerequestid"),
-    ("timeToHireVacancyIDs", "timetohirevacancyid")
-]
+# Construct the full S3 path to the folder
+folder_path = f"{s3_path}{folder_name}/"
 
-# Process Each Folder
-for folder, redshift_table in folders:
-    try:
-        print(f"\nProcessing Folder: {folder} → Redshift Table: {redshift_table}")
-        
-        # Construct the full S3 path to the folder and file
-        folder_path = f"{s3_path}{folder}/"  # Try folder with CSVs
-        file_path = f"{s3_path}{folder}.csv"  # Try single file as fallback
-        
-        # Try reading from folder (multiple CSVs)
-        print(f"Attempting Folder Path: {folder_path}")
-        dynamic_frame = glueContext.create_dynamic_frame.from_options(
-            connection_type="s3",
-            connection_options={"paths": [folder_path], "recurse": True},
-            format="csv",
-            format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
-        )
-        row_count_folder = dynamic_frame.count()
-        print(f"Row count for {folder} (folder path): {row_count_folder}")
+# Process the Folder
+try:
+    print(f"\nProcessing Folder: {folder_name} → Redshift Table: {full_table_name}")
 
-        if row_count_folder == 0:
-            print(f"WARNING: No data read from folder path {folder_path} - trying single file path")
-            # Try reading from single file
-            print(f"Attempting Single File Path: {file_path}")
-            dynamic_frame = glueContext.create_dynamic_frame.from_options(
-                connection_type="s3",
-                connection_options={"paths": [file_path], "recurse": False},
-                format="csv",
-                format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
-            )
-            row_count_file = dynamic_frame.count()
-            print(f"Row count for {folder} (single file path): {row_count_file}")
-            if row_count_file == 0:
-                print(f"ERROR: No data read from either {folder_path} or {file_path} - skipping {folder}")
-                continue
-            else:
-                print(f"Sample Data from {folder} (single file path):")
-                dynamic_frame.show(5)
-        else:
-            print(f"Sample Data from {folder} (folder path):")
-            dynamic_frame.show(5)
+    # Read all CSV files from the folder
+    print(f"Attempting Folder Path: {folder_path}")
+    dynamic_frame = glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        connection_options={"paths": [folder_path], "recurse": True},
+        format="csv",
+        format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
+    )
+    row_count = dynamic_frame.count()
+    print(f"Row count for {folder_name}: {row_count}")
 
-        # Target Redshift Table
-        full_table_name = f"{redshift_schema}.{redshift_table}"
-        print(f"Target Redshift Table: {full_table_name}")
+    if row_count == 0:
+        print(f"WARNING: No data read from {folder_path} - check folder contents or CSV format")
+        raise Exception("No data to process")
 
-        # Check schema and column names
-        df = dynamic_frame.toDF()
-        print(f"Column names from CSV for {folder}: {df.columns}")
+    # Check schema and data
+    print(f"Schema for {folder_name}:")
+    dynamic_frame.printSchema()
+    print(f"Sample Data from {folder_name} (raw):")
+    dynamic_frame.show(5)
 
-        # Write to Redshift with truncate
-        truncate_query = f"TRUNCATE TABLE {full_table_name};"
-        print(f"Executing truncate: {truncate_query}")
-        glueContext.write_dynamic_frame.from_jdbc_conf(
-            frame=dynamic_frame,
-            catalog_connection=redshift_connection,
-            connection_options={
-                "dbtable": full_table_name,
-                "database": redshift_database,
-                "preactions": truncate_query
-            },
-            redshift_tmp_dir=redshift_temp_dir
-        )
-        print(f"Write operation completed for {full_table_name}")
+    # Convert to DataFrame to inspect column names
+    df = dynamic_frame.toDF()
+    print(f"Column names from CSV for {folder_name}: {df.columns}")
 
-    except Exception as e:
-        print(f"Error processing {folder}: {str(e)}")
-        continue
+    # Filter out header row if it appears as data
+    header_row = [str(h).lower() for h in df.columns]
+    filter_conditions = [col(c).cast("string").lower() != lit(h) for c, h in zip(df.columns, header_row)]
+    filter_condition = reduce(lambda x, y: x & y, filter_conditions)
+    df = df.filter(filter_condition)
+    row_count_after_filter = df.count()
+    print(f"Row count for {folder_name} after filtering out header row: {row_count_after_filter}")
+    if row_count_after_filter == 0:
+        print(f"WARNING: No data remains after filtering - all rows may be headers")
+        raise Exception("No valid data after filtering")
+
+    # Convert back to DynamicFrame
+    filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")
+
+    # Write to Redshift with truncate, ensuring no table creation
+    truncate_query = f"TRUNCATE TABLE {full_table_name};"
+    print(f"Executing truncate: {truncate_query}")
+    glueContext.write_dynamic_frame.from_jdbc_conf(
+        frame=filtered_dynamic_frame,
+        catalog_connection=redshift_connection,
+        connection_options={
+            "dbtable": full_table_name,
+            "database": redshift_database,
+            "preactions": truncate_query,
+            "createTableIfNotExists": "false"
+        },
+        redshift_tmp_dir=redshift_temp_dir
+    )
+    print(f"Write operation completed for {full_table_name}")
+
+except Exception as e:
+    print(f"Error processing {folder_name}: {str(e)}")
+    raise  # Raise exception to fail the job if critical
 
 # Commit Job
 print("\nJob execution completed - committing job")

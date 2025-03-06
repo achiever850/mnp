@@ -27,7 +27,7 @@ full_table_name = f"{redshift_schema}.{redshift_table}"
 # Construct the full S3 path to the folder
 folder_path = f"{s3_path}{folder_name}/"
 
-# Define expected Redshift table columns (updated with your schema)
+# Define expected Redshift table columns (update with your exact schema)
 expected_columns = [
     ("tenantid", "int"),
     ("ca_rankinglistid", "bigint"),
@@ -64,21 +64,23 @@ try:
     df = dynamic_frame.toDF()
     print(f"Column names from CSV for {folder_name}: {df.columns}")
 
-    # Validate CSV columns match Redshift table (case-insensitive)
+    # Validate and map CSV columns to Redshift columns
     csv_columns = [col.lower() for col in df.columns]
     expected_col_names = [col[0].lower() for col in expected_columns]
+    if len(csv_columns) != len(expected_col_names):
+        print(f"ERROR: Number of columns mismatch - CSV has {len(csv_columns)}, Redshift expects {len(expected_col_names)}")
+        raise Exception("CSV column count does not match Redshift table")
     if set(csv_columns) != set(expected_col_names):
         missing_cols = set(expected_col_names) - set(csv_columns)
         extra_cols = set(csv_columns) - set(expected_col_names)
         print(f"ERROR: Column mismatch - Missing in CSV: {missing_cols}, Extra in CSV: {extra_cols}")
-        # Map CSV columns to Redshift columns if only case differs
-        csv_to_redshift = {col.lower(): col for col in df.columns}
-        redshift_cols = [csv_to_redshift.get(col[0].lower(), col[0]) for col in expected_columns]
-        if len(redshift_cols) == len(df.columns):
-            print(f"Mapping CSV columns to Redshift columns: {list(zip(df.columns, redshift_cols))}")
-            df = df.toDF(*redshift_cols)
-        else:
-            raise Exception("CSV columns do not match Redshift table structure after mapping attempt")
+        raise Exception("CSV columns do not match Redshift table structure")
+
+    # Map CSV columns to Redshift column names (case-insensitive)
+    csv_to_redshift = {csv_col.lower(): red_col for csv_col, red_col in zip(df.columns, [col[0] for col in expected_columns])}
+    mapped_columns = [csv_to_redshift.get(col.lower(), col) for col in df.columns]
+    df = df.toDF(*mapped_columns)
+    print(f"Mapped column names to Redshift: {df.columns}")
 
     # Convert back to DynamicFrame
     filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")
@@ -93,7 +95,8 @@ try:
             "dbtable": full_table_name,
             "database": redshift_database,
             "preactions": truncate_query,
-            "createTableIfNotExists": "false"  # Prevent table creation
+            "createTableIfNotExists": "false",  # Prevent table creation
+            "redshiftTmpDir": redshift_temp_dir  # Ensure temp dir is used
         },
         redshift_tmp_dir=redshift_temp_dir
     )

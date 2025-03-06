@@ -5,8 +5,6 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import col, lit
-from functools import reduce
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -28,6 +26,15 @@ full_table_name = f"{redshift_schema}.{redshift_table}"
 
 # Construct the full S3 path to the folder
 folder_path = f"{s3_path}{folder_name}/"
+
+# Define expected Redshift table columns (manually set based on your table structure)
+# Replace with actual column names and types from your Redshift table
+expected_columns = [
+    ("tenantid", "int"),
+    ("ca_rankinglistid", "bigint"),
+    ("ca_applicationid", "bigint"),
+    ("applicationid", "varchar(100)")  # Adjust types and names to match your table
+]
 
 # Process the Folder
 try:
@@ -58,16 +65,14 @@ try:
     df = dynamic_frame.toDF()
     print(f"Column names from CSV for {folder_name}: {df.columns}")
 
-    # Filter out header row if it appears as data
-    header_row = [str(h).lower() for h in df.columns]
-    filter_conditions = [~col(c).cast("string").lower().isin([h]) for c, h in zip(df.columns, header_row)]
-    filter_condition = reduce(lambda x, y: x & y, filter_conditions)
-    df = df.filter(filter_condition)
-    row_count_after_filter = df.count()
-    print(f"Row count for {folder_name} after filtering out header row: {row_count_after_filter}")
-    if row_count_after_filter == 0:
-        print(f"WARNING: No data remains after filtering - all rows may be headers")
-        raise Exception("No valid data after filtering")
+    # Validate CSV columns match Redshift table (case-insensitive)
+    csv_columns = [col.lower() for col in df.columns]
+    expected_col_names = [col[0].lower() for col in expected_columns]
+    if set(csv_columns) != set(expected_col_names):
+        missing_cols = set(expected_col_names) - set(csv_columns)
+        extra_cols = set(csv_columns) - set(expected_col_names)
+        print(f"ERROR: Column mismatch - Missing in CSV: {missing_cols}, Extra in CSV: {extra_cols}")
+        raise Exception("CSV columns do not match Redshift table structure")
 
     # Convert back to DynamicFrame
     filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")
@@ -82,7 +87,7 @@ try:
             "dbtable": full_table_name,
             "database": redshift_database,
             "preactions": truncate_query,
-            "createTableIfNotExists": "false"
+            "createTableIfNotExists": "false"  # Prevent table creation
         },
         redshift_tmp_dir=redshift_temp_dir
     )

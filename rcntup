@@ -5,6 +5,7 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.types import IntegerType, LongType
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -27,13 +28,20 @@ full_table_name = f"{redshift_schema}.{redshift_table}"
 # Construct the full S3 path to the folder
 folder_path = f"{s3_path}{folder_name}/"
 
-# Define expected Redshift table columns (exact match from your schema)
+# Define expected Redshift table columns and types
 redshift_columns = [
-    "tenantid",
-    "ca_rankinglistid",
-    "ca_applicationid",
-    "applicationid"
+    ("tenantid", "int"),
+    ("ca_rankinglistid", "bigint"),
+    ("ca_applicationid", "bigint"),
+    ("applicationid", "bigint")
 ]
+redshift_col_names = [col[0] for col in redshift_columns]
+redshift_types = {
+    "tenantid": IntegerType(),
+    "ca_rankinglistid": LongType(),
+    "ca_applicationid": LongType(),
+    "applicationid": LongType()
+}
 
 # Process the Folder
 try:
@@ -68,15 +76,15 @@ try:
     csv_columns = [col.lower() for col in df.columns]
     if all(col.startswith('col') for col in csv_columns):
         print(f"WARNING: CSV headers not detected - assuming no headers and mapping to Redshift columns")
-        if len(df.columns) != len(redshift_columns):
-            print(f"ERROR: Number of columns mismatch - CSV has {len(df.columns)}, Redshift expects {len(redshift_columns)}")
+        if len(df.columns) != len(redshift_col_names):
+            print(f"ERROR: Number of columns mismatch - CSV has {len(df.columns)}, Redshift expects {len(redshift_col_names)}")
             raise Exception("CSV column count does not match Redshift table")
         # Map default column names to Redshift columns
-        df = df.toDF(*redshift_columns)
+        df = df.toDF(*redshift_col_names)
         print(f"Mapped column names to Redshift: {df.columns}")
     else:
         # Validate CSV columns match Redshift table (case-insensitive)
-        expected_col_names = [col.lower() for col in redshift_columns]
+        expected_col_names = [col.lower() for col in redshift_col_names]
         if len(csv_columns) != len(expected_col_names):
             print(f"ERROR: Number of columns mismatch - CSV has {len(csv_columns)}, Redshift expects {len(expected_col_names)}")
             raise Exception("CSV column count does not match Redshift table")
@@ -86,10 +94,21 @@ try:
             print(f"ERROR: Column mismatch - Missing in CSV: {missing_cols}, Extra in CSV: {extra_cols}")
             raise Exception("CSV columns do not match Redshift table structure")
         # Map CSV columns to Redshift column names (case-sensitive match)
-        csv_to_redshift = {csv_col.lower(): red_col for csv_col, red_col in zip(df.columns, redshift_columns)}
+        csv_to_redshift = {csv_col.lower(): red_col for csv_col, red_col in zip(df.columns, redshift_col_names)}
         mapped_columns = [csv_to_redshift.get(col.lower(), col) for col in df.columns]
         df = df.toDF(*mapped_columns)
         print(f"Mapped column names to Redshift: {df.columns}")
+
+    # Cast columns to match Redshift types
+    for col_name in df.columns:
+        df = df.withColumn(col_name, df[col_name].cast(redshift_types[col_name]))
+        print(f"Cast column {col_name} to {redshift_types[col_name]}")
+
+    # Check for nulls or invalid data
+    for col_name in df.columns:
+        invalid_count = df.filter(df[col_name].isNull()).count()
+        if invalid_count > 0:
+            print(f"WARNING: Found {invalid_count} rows with NULL values in column {col_name} - Redshift may reject these")
 
     # Convert back to DynamicFrame
     filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")

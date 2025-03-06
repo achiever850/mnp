@@ -27,13 +27,12 @@ full_table_name = f"{redshift_schema}.{redshift_table}"
 # Construct the full S3 path to the folder
 folder_path = f"{s3_path}{folder_name}/"
 
-# Define expected Redshift table columns (manually set based on your table structure)
-# Replace with actual column names and types from your Redshift table
+# Define expected Redshift table columns (updated with your schema)
 expected_columns = [
     ("tenantid", "int"),
     ("ca_rankinglistid", "bigint"),
     ("ca_applicationid", "bigint"),
-    ("applicationid", "varchar(100)")  # Adjust types and names to match your table
+    ("applicationid", "bigint")
 ]
 
 # Process the Folder
@@ -72,7 +71,14 @@ try:
         missing_cols = set(expected_col_names) - set(csv_columns)
         extra_cols = set(csv_columns) - set(expected_col_names)
         print(f"ERROR: Column mismatch - Missing in CSV: {missing_cols}, Extra in CSV: {extra_cols}")
-        raise Exception("CSV columns do not match Redshift table structure")
+        # Map CSV columns to Redshift columns if only case differs
+        csv_to_redshift = {col.lower(): col for col in df.columns}
+        redshift_cols = [csv_to_redshift.get(col[0].lower(), col[0]) for col in expected_columns]
+        if len(redshift_cols) == len(df.columns):
+            print(f"Mapping CSV columns to Redshift columns: {list(zip(df.columns, redshift_cols))}")
+            df = df.toDF(*redshift_cols)
+        else:
+            raise Exception("CSV columns do not match Redshift table structure after mapping attempt")
 
     # Convert back to DynamicFrame
     filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")

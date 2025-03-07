@@ -15,124 +15,151 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-# S3 and Redshift Configurations
-s3_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
-folder_name = "certificateApplicationApplicationIDs"
-redshift_table = "certificateApplicationApplicationID"
+# Common S3 and Redshift Configurations
+s3_base_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
 redshift_connection = "hcd_dev_redshift_connection"
 redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
-full_table_name = f"{redshift_schema}.{redshift_table}"
 
-# Construct the full S3 path to the folder
-folder_path = f"{s3_path}{folder_name}/"
-
-# Define expected Redshift table columns and types
-redshift_columns = [
-    ("tenantid", "int"),
-    ("ca_rankinglistid", "bigint"),
-    ("ca_applicationid", "bigint"),
-    ("applicationid", "bigint")
-]
-redshift_col_names = [col[0] for col in redshift_columns]
-redshift_types = {
-    "tenantid": IntegerType(),
-    "ca_rankinglistid": LongType(),
-    "ca_applicationid": LongType(),
-    "applicationid": LongType()
+# Dataset-specific configurations
+datasets = {
+    "certificateApplicationApplicationIDs": {
+        "folder_name": "certificateApplicationApplicationIDs",
+        "redshift_table": "certificateApplicationApplicationID",
+        "columns": [
+            ("tenantid", "int"),
+            ("ca_rankinglistid", "bigint"),
+            ("ca_applicationid", "bigint"),
+            ("applicationid", "bigint")
+        ],
+        "types": {
+            "tenantid": IntegerType(),
+            "ca_rankinglistid": LongType(),
+            "ca_applicationid": LongType(),
+            "applicationid": LongType()
+        }
+    },
+    "certificateApplicationRankingListId": {
+        "folder_name": "certificateApplicationRankingListId",
+        "redshift_table": "certificateApplicationRankingListId",
+        "columns": [
+            ("tenantid", "int"),
+            ("ca_rankinglistid", "bigint"),
+            ("ca_applicationid", "bigint"),
+            ("rankinglistid", "bigint")
+        ],
+        "types": {
+            "tenantid": IntegerType(),
+            "ca_rankinglistid": LongType(),
+            "ca_applicationid": LongType(),
+            "rankinglistid": LongType()
+        }
+    }
 }
 
-# Process the Folder
-try:
-    print(f"\nProcessing Folder: {folder_name} → Redshift Table: {full_table_name}")
+# Function to process and load a single dataset
+def process_dataset(folder_name, redshift_table, redshift_columns, redshift_types):
+    full_table_name = f"{redshift_schema}.{redshift_table}"
+    folder_path = f"{s3_base_path}{folder_name}/"
+    redshift_col_names = [col[0] for col in redshift_columns]
 
-    # Read all CSV files from the folder
-    print(f"Attempting Folder Path: {folder_path}")
-    dynamic_frame = glueContext.create_dynamic_frame.from_options(
-        connection_type="s3",
-        connection_options={"paths": [folder_path], "recurse": True},
-        format="csv",
-        format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True, "ignoreLeadingWhiteSpace": True, "ignoreTrailingWhiteSpace": True}
+    try:
+        print(f"\nProcessing Folder: {folder_name} → Redshift Table: {full_table_name}")
+
+        # Read all CSV files from the folder
+        print(f"Attempting Folder Path: {folder_path}")
+        dynamic_frame = glueContext.create_dynamic_frame.from_options(
+            connection_type="s3",
+            connection_options={"paths": [folder_path], "recurse": True},
+            format="csv",
+            format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True, "ignoreLeadingWhiteSpace": True, "ignoreTrailingWhiteSpace": True}
+        )
+        row_count = dynamic_frame.count()
+        print(f"Row count for {folder_name}: {row_count}")
+
+        if row_count == 0:
+            print(f"WARNING: No data read from {folder_path} - check folder contents or CSV format")
+            raise Exception("No data to process")
+
+        # Check schema and data
+        print(f"Schema for {folder_name}:")
+        dynamic_frame.printSchema()
+        print(f"Sample Data from {folder_name} (raw):")
+        dynamic_frame.show(5)
+
+        # Convert to DataFrame to inspect column names
+        df = dynamic_frame.toDF()
+        print(f"Column names from CSV for {folder_name}: {df.columns}")
+
+        # Check if headers are default (col0, col1, etc.) and map to Redshift columns
+        csv_columns = [col.lower() for col in df.columns]
+        if all(col.startswith('col') for col in csv_columns):
+            print(f"WARNING: CSV headers not detected - assuming no headers and mapping to Redshift columns")
+            if len(df.columns) != len(redshift_col_names):
+                print(f"ERROR: Number of columns mismatch - CSV has {len(df.columns)}, Redshift expects {len(redshift_col_names)}")
+                raise Exception("CSV column count does not match Redshift table")
+            df = df.toDF(*redshift_col_names)
+            print(f"Mapped column names to Redshift: {df.columns}")
+        else:
+            # Validate CSV columns match Redshift table (case-insensitive)
+            expected_col_names = [col.lower() for col in redshift_col_names]
+            if len(csv_columns) != len(expected_col_names):
+                print(f"ERROR: Number of columns mismatch - CSV has {len(csv_columns)}, Redshift expects {len(expected_col_names)}")
+                raise Exception("CSV column count does not match Redshift table")
+            if set(csv_columns) != set(expected_col_names):
+                missing_cols = set(expected_col_names) - set(csv_columns)
+                extra_cols = set(csv_columns) - set(expected_col_names)
+                print(f"ERROR: Column mismatch - Missing in CSV: {missing_cols}, Extra in CSV: {extra_cols}")
+                raise Exception("CSV columns do not match Redshift table structure")
+            csv_to_redshift = {csv_col.lower(): red_col for csv_col, red_col in zip(df.columns, redshift_col_names)}
+            mapped_columns = [csv_to_redshift.get(col.lower(), col) for col in df.columns]
+            df = df.toDF(*mapped_columns)
+            print(f"Mapped column names to Redshift: {df.columns}")
+
+        # Cast columns to match Redshift types
+        for col_name in df.columns:
+            df = df.withColumn(col_name, df[col_name].cast(redshift_types[col_name]))
+            print(f"Cast column {col_name} to {redshift_types[col_name]}")
+
+        # Check for nulls or invalid data
+        for col_name in df.columns:
+            invalid_count = df.filter(df[col_name].isNull()).count()
+            if invalid_count > 0:
+                print(f"WARNING: Found {invalid_count} rows with NULL values in column {col_name} - Redshift may reject these")
+
+        # Convert back to DynamicFrame
+        filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")
+
+        # Write to Redshift with truncate
+        truncate_query = f"TRUNCATE TABLE {full_table_name};"
+        print(f"Executing truncate: {truncate_query}")
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=filtered_dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": full_table_name,
+                "database": redshift_database,
+                "preactions": truncate_query,
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": redshift_temp_dir
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+        print(f"Write operation completed for {full_table_name}")
+
+    except Exception as e:
+        print(f"Error processing {folder_name}: {str(e)}")
+        raise  # Raise exception to fail the job if critical
+
+# Process both datasets
+for dataset_name, config in datasets.items():
+    process_dataset(
+        folder_name=config["folder_name"],
+        redshift_table=config["redshift_table"],
+        redshift_columns=config["columns"],
+        redshift_types=config["types"]
     )
-    row_count = dynamic_frame.count()
-    print(f"Row count for {folder_name}: {row_count}")
-
-    if row_count == 0:
-        print(f"WARNING: No data read from {folder_path} - check folder contents or CSV format")
-        raise Exception("No data to process")
-
-    # Check schema and data
-    print(f"Schema for {folder_name}:")
-    dynamic_frame.printSchema()
-    print(f"Sample Data from {folder_name} (raw):")
-    dynamic_frame.show(5)
-
-    # Convert to DataFrame to inspect column names
-    df = dynamic_frame.toDF()
-    print(f"Column names from CSV for {folder_name}: {df.columns}")
-
-    # Check if headers are default (col0, col1, etc.) and map to Redshift columns
-    csv_columns = [col.lower() for col in df.columns]
-    if all(col.startswith('col') for col in csv_columns):
-        print(f"WARNING: CSV headers not detected - assuming no headers and mapping to Redshift columns")
-        if len(df.columns) != len(redshift_col_names):
-            print(f"ERROR: Number of columns mismatch - CSV has {len(df.columns)}, Redshift expects {len(redshift_col_names)}")
-            raise Exception("CSV column count does not match Redshift table")
-        # Map default column names to Redshift columns
-        df = df.toDF(*redshift_col_names)
-        print(f"Mapped column names to Redshift: {df.columns}")
-    else:
-        # Validate CSV columns match Redshift table (case-insensitive)
-        expected_col_names = [col.lower() for col in redshift_col_names]
-        if len(csv_columns) != len(expected_col_names):
-            print(f"ERROR: Number of columns mismatch - CSV has {len(csv_columns)}, Redshift expects {len(expected_col_names)}")
-            raise Exception("CSV column count does not match Redshift table")
-        if set(csv_columns) != set(expected_col_names):
-            missing_cols = set(expected_col_names) - set(csv_columns)
-            extra_cols = set(csv_columns) - set(expected_col_names)
-            print(f"ERROR: Column mismatch - Missing in CSV: {missing_cols}, Extra in CSV: {extra_cols}")
-            raise Exception("CSV columns do not match Redshift table structure")
-        # Map CSV columns to Redshift column names (case-sensitive match)
-        csv_to_redshift = {csv_col.lower(): red_col for csv_col, red_col in zip(df.columns, redshift_col_names)}
-        mapped_columns = [csv_to_redshift.get(col.lower(), col) for col in df.columns]
-        df = df.toDF(*mapped_columns)
-        print(f"Mapped column names to Redshift: {df.columns}")
-
-    # Cast columns to match Redshift types
-    for col_name in df.columns:
-        df = df.withColumn(col_name, df[col_name].cast(redshift_types[col_name]))
-        print(f"Cast column {col_name} to {redshift_types[col_name]}")
-
-    # Check for nulls or invalid data
-    for col_name in df.columns:
-        invalid_count = df.filter(df[col_name].isNull()).count()
-        if invalid_count > 0:
-            print(f"WARNING: Found {invalid_count} rows with NULL values in column {col_name} - Redshift may reject these")
-
-    # Convert back to DynamicFrame
-    filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")
-
-    # Write to Redshift with truncate, ensuring no table creation
-    truncate_query = f"TRUNCATE TABLE {full_table_name};"
-    print(f"Executing truncate: {truncate_query}")
-    glueContext.write_dynamic_frame.from_jdbc_conf(
-        frame=filtered_dynamic_frame,
-        catalog_connection=redshift_connection,
-        connection_options={
-            "dbtable": full_table_name,
-            "database": redshift_database,
-            "preactions": truncate_query,
-            "createTableIfNotExists": "false",  # Prevent table creation
-            "redshiftTmpDir": redshift_temp_dir  # Ensure temp dir is used
-        },
-        redshift_tmp_dir=redshift_temp_dir
-    )
-    print(f"Write operation completed for {full_table_name}")
-
-except Exception as e:
-    print(f"Error processing {folder_name}: {str(e)}")
-    raise  # Raise exception to fail the job if critical
 
 # Commit Job
 print("\nJob execution completed - committing job")

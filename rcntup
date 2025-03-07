@@ -7,6 +7,7 @@ from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql.types import IntegerType, LongType, StringType
 from pyspark.sql.functions import col
+import boto3
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -23,7 +24,7 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# Dataset configurations with CSV-aligned headers
+# Dataset configurations
 datasets = {
     "certificateApplicationApplicationIDs": {
         "folder_name": "certificateApplicationApplicationIDs",
@@ -39,6 +40,20 @@ datasets = {
     }
 }
 
+# Function to read raw CSV lines from S3
+def read_raw_csv_sample(folder_path, num_lines=5):
+    s3_client = boto3.client('s3')
+    bucket = "hcd-ec2-windows-servers-file-transfer-bucket"
+    prefix = folder_path.split('s3://')[1].split('/', 1)[1]
+    response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    if 'Contents' not in response:
+        return ["No files found in S3 path"]
+    # Read first file only for simplicity
+    key = response['Contents'][0]['Key']
+    obj = s3_client.get_object(Bucket=bucket, Key=key)
+    lines = obj['Body'].read().decode('utf-8').splitlines()[:num_lines]
+    return lines
+
 # Processing function
 def process_dataset(folder_name, redshift_table, redshift_columns, redshift_types):
     full_table_name = f"{redshift_schema}.{redshift_table}"
@@ -47,6 +62,12 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
 
     try:
         print(f"\nProcessing Folder: {folder_name} → Redshift Table: {full_table_name}")
+
+        # Log raw CSV sample
+        print(f"Raw CSV Sample (first 5 lines) for {folder_name}:")
+        raw_lines = read_raw_csv_sample(folder_path)
+        for i, line in enumerate(raw_lines):
+            print(f"Line {i+1}: {line}")
 
         # Read CSV
         dynamic_frame = glueContext.create_dynamic_frame.from_options(
@@ -70,9 +91,14 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         df = dynamic_frame.toDF()
         print(f"CSV Column names for {folder_name}: {df.columns}")
 
-        # Validate headers
-        csv_columns = [col for col in df.columns]  # Keep original case
-        if set(csv_columns) != set(redshift_col_names):
+        # Force header mapping if headers are not detected correctly
+        csv_columns = [col for col in df.columns]
+        if all(col.startswith('col') for col in csv_columns):
+            print(f"WARNING: Headers not detected - forcing mapping to {redshift_col_names}")
+            if len(csv_columns) != len(redshift_col_names):
+                raise Exception(f"Column count mismatch - CSV has {len(csv_columns)}, expected {len(redshift_col_names)}")
+            df = df.toDF(*redshift_col_names)
+        elif set(csv_columns) != set(redshift_col_names):
             print(f"WARNING: CSV headers {csv_columns} do not match expected {redshift_col_names}")
             if len(csv_columns) == len(redshift_col_names):
                 print(f"Mapping by position: {csv_columns} → {redshift_col_names}")

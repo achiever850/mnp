@@ -6,6 +6,7 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.dynamicframe import DynamicFrame
 from pyspark.sql.types import IntegerType, LongType
+from pyspark.sql.functions import col
 
 # Initialize Glue context and job
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
@@ -47,7 +48,7 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
     try:
         print(f"\nProcessing Folder: {folder_name} → Redshift Table: {full_table_name}")
 
-        # Read CSV with explicit schema to avoid inference issues
+        # Read CSV
         dynamic_frame = glueContext.create_dynamic_frame.from_options(
             connection_type="s3",
             connection_options={"paths": [folder_path], "recurse": True},
@@ -58,12 +59,6 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         print(f"Row count for {folder_name}: {row_count}")
         if row_count == 0:
             raise Exception("No data to process")
-
-        # Inspect raw data
-        print(f"Raw Schema for {folder_name}:")
-        dynamic_frame.printSchema()
-        print(f"Raw Sample Data for {folder_name}:")
-        dynamic_frame.show(5)
 
         # Convert to DataFrame
         df = dynamic_frame.toDF()
@@ -84,21 +79,36 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
             mapped_columns = [csv_to_redshift.get(col.lower(), col) for col in df.columns]
             df = df.toDF(*mapped_columns)
 
-        # Cast columns and debug nulls before/after
+        # Debug pre-cast data
         print(f"Before casting - Sample Data:")
         df.show(5)
         for col_name in df.columns:
             pre_null_count = df.filter(df[col_name].isNull()).count()
             print(f"Pre-cast nulls in {col_name}: {pre_null_count}")
 
+        # Identify rows that will become NULL after casting
+        pre_cast_df = df.cache()  # Cache for efficiency
         for col_name in df.columns:
-            df = df.withColumn(col_name, df[col_name].cast(redshift_types[col_name]))
+            df = df.withColumn(col_name, col(col_name).cast(redshift_types[col_name]))
 
         print(f"After casting - Sample Data:")
         df.show(5)
         for col_name in df.columns:
             post_null_count = df.filter(df[col_name].isNull()).count()
             print(f"Post-cast nulls in {col_name}: {post_null_count}")
+
+        # Find rows with NULLs post-casting that were not NULL pre-casting
+        null_rows = df.join(
+            pre_cast_df,
+            on=[col_name for col_name in df.columns],
+            how="left_anti"  # Rows in df not matching pre_cast_df (i.e., changed to NULL)
+        ).filter(
+            col("tenantid").isNull() | col("ca_rankinglistid").isNull() | 
+            col("ca_applicationid").isNull() | col(df.columns[-1]).isNull()  # Check last column dynamically
+        )
+        print(f"Rows with NULLs introduced by casting (up to 5):")
+        null_rows.show(5)
+        print(f"Total rows with NULLs introduced: {null_rows.count()}")
 
         # Convert back to DynamicFrame
         filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")

@@ -48,7 +48,6 @@ def read_raw_csv_sample(folder_path, num_lines=5):
     response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
     if 'Contents' not in response:
         return ["No files found in S3 path"]
-    # Read first file only for simplicity
     key = response['Contents'][0]['Key']
     obj = s3_client.get_object(Bucket=bucket, Key=key)
     lines = obj['Body'].read().decode('utf-8').splitlines()[:num_lines]
@@ -69,12 +68,12 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         for i, line in enumerate(raw_lines):
             print(f"Line {i+1}: {line}")
 
-        # Read CSV
+        # Read CSV with header=False to inspect raw data
         dynamic_frame = glueContext.create_dynamic_frame.from_options(
             connection_type="s3",
             connection_options={"paths": [folder_path], "recurse": True},
             format="csv",
-            format_options={"header": True, "separator": ",", "quoteChar": "\"", "skipBlankLines": True, "ignoreLeadingWhiteSpace": True, "ignoreTrailingWhiteSpace": True}
+            format_options={"header": False, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
         )
         row_count = dynamic_frame.count()
         print(f"Row count for {folder_name}: {row_count}")
@@ -87,26 +86,25 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         print(f"Raw DynamicFrame Sample (first 5 rows):")
         dynamic_frame.show(5)
 
-        # Convert to DataFrame
-        df = dynamic_frame.toDF()
+        # Convert to DataFrame safely
+        df = spark.createDataFrame(dynamic_frame.toDF().rdd, dynamic_frame.toDF().schema)
         print(f"CSV Column names for {folder_name}: {df.columns}")
 
-        # Force header mapping if headers are not detected correctly
+        # Map headers assuming first row was headers
         csv_columns = [col for col in df.columns]
         if all(col.startswith('col') for col in csv_columns):
-            print(f"WARNING: Headers not detected - forcing mapping to {redshift_col_names}")
+            print(f"WARNING: Headers not detected - assuming first row is data, mapping to {redshift_col_names}")
             if len(csv_columns) != len(redshift_col_names):
                 raise Exception(f"Column count mismatch - CSV has {len(csv_columns)}, expected {len(redshift_col_names)}")
+            # Filter out header row if it matches expected headers
+            header_row = [f"{col[0]}" for col in redshift_columns]
+            df = df.filter(~col(csv_columns[0]).isin(header_row[0]))
             df = df.toDF(*redshift_col_names)
-        elif set(csv_columns) != set(redshift_col_names):
-            print(f"WARNING: CSV headers {csv_columns} do not match expected {redshift_col_names}")
-            if len(csv_columns) == len(redshift_col_names):
-                print(f"Mapping by position: {csv_columns} → {redshift_col_names}")
-                df = df.toDF(*redshift_col_names)
-            else:
-                raise Exception(f"Cannot map headers - CSV has {len(csv_columns)} columns, expected {len(redshift_col_names)}")
         else:
-            print(f"Headers match: {csv_columns}")
+            print(f"Headers detected: {csv_columns}")
+            if set(csv_columns) != set(redshift_col_names):
+                print(f"WARNING: CSV headers {csv_columns} do not match expected {redshift_col_names}")
+                df = df.toDF(*redshift_col_names)
 
         print(f"Mapped Column names for {folder_name}: {df.columns}")
 

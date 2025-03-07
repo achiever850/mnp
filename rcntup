@@ -23,19 +23,19 @@ redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
 redshift_database = "hcd-dev-db"
 redshift_schema = "usastaffing_staging"
 
-# Dataset configurations
+# Dataset configurations with CSV-aligned headers
 datasets = {
     "certificateApplicationApplicationIDs": {
         "folder_name": "certificateApplicationApplicationIDs",
         "redshift_table": "certificateApplicationApplicationID",
-        "columns": [("tenantid", "int"), ("ca_rankinglistid", "bigint"), ("ca_applicationid", "bigint"), ("applicationid", "bigint")],
-        "types": {"tenantid": IntegerType(), "ca_rankinglistid": LongType(), "ca_applicationid": LongType(), "applicationid": LongType()}
+        "columns": [("tenantId", "int"), ("cA_RankingListId", "bigint"), ("cA_ApplicationId", "bigint"), ("applicationId", "bigint")],
+        "types": {"tenantId": IntegerType(), "cA_RankingListId": LongType(), "cA_ApplicationId": LongType(), "applicationId": LongType()}
     },
-    "certificateApplicationRankingListIDs": {  # Updated folder_name
+    "certificateApplicationRankingListIDs": {
         "folder_name": "certificateApplicationRankingListIDs",
-        "redshift_table": "certificateApplicationRankingListID",  # Updated redshift_table
-        "columns": [("tenantid", "int"), ("ca_rankinglistid", "bigint"), ("ca_applicationid", "bigint"), ("rankinglistid", "bigint")],
-        "types": {"tenantid": IntegerType(), "ca_rankinglistid": LongType(), "ca_applicationid": LongType(), "rankinglistid": LongType()}
+        "redshift_table": "certificateApplicationRankingListID",
+        "columns": [("tenantId", "int"), ("cA_RankingListId", "bigint"), ("cA_ApplicationId", "bigint"), ("rankingListId", "bigint")],
+        "types": {"tenantId": IntegerType(), "cA_RankingListId": LongType(), "cA_ApplicationId": LongType(), "rankingListId": LongType()}
     }
 }
 
@@ -60,7 +60,7 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         if row_count == 0:
             raise Exception("No data to process")
 
-        # Log raw data immediately
+        # Log raw data
         print(f"Raw DynamicFrame Schema for {folder_name}:")
         dynamic_frame.printSchema()
         print(f"Raw DynamicFrame Sample (first 5 rows):")
@@ -71,16 +71,18 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         print(f"CSV Column names for {folder_name}: {df.columns}")
 
         # Validate headers
-        csv_columns = [col.lower() for col in df.columns]
-        expected_col_names = [col.lower() for col in redshift_col_names]
-        if set(csv_columns) != set(expected_col_names):
-            print(f"ERROR: CSV headers {csv_columns} do not match expected {expected_col_names}")
-            raise Exception("Header mismatch")
+        csv_columns = [col for col in df.columns]  # Keep original case
+        if set(csv_columns) != set(redshift_col_names):
+            print(f"WARNING: CSV headers {csv_columns} do not match expected {redshift_col_names}")
+            if len(csv_columns) == len(redshift_col_names):
+                print(f"Mapping by position: {csv_columns} → {redshift_col_names}")
+                df = df.toDF(*redshift_col_names)
+            else:
+                raise Exception(f"Cannot map headers - CSV has {len(csv_columns)} columns, expected {len(redshift_col_names)}")
+        else:
+            print(f"Headers match: {csv_columns}")
 
-        # Map columns (case-sensitive)
-        csv_to_redshift = {csv_col.lower(): red_col for csv_col, red_col in zip(df.columns, redshift_col_names)}
-        mapped_columns = [csv_to_redshift.get(col.lower(), col) for col in df.columns]
-        df = df.toDF(*mapped_columns)
+        print(f"Mapped Column names for {folder_name}: {df.columns}")
 
         # Preserve original string values
         for col_name in redshift_types.keys():

@@ -37,6 +37,18 @@ datasets = {
         "redshift_table": "certificateApplicationRankingListID",
         "columns": [("tenantId", "int"), ("cA_RankingListId", "bigint"), ("cA_ApplicationId", "bigint"), ("rankingListId", "bigint")],
         "types": {"tenantId": IntegerType(), "cA_RankingListId": LongType(), "cA_ApplicationId": LongType(), "rankingListId": LongType()}
+    },
+    "certificateApplicationNewHireIDs": {
+        "folder_name": "certificateApplicationNewHireIDs",
+        "redshift_table": "certificateApplicationNewHireID",
+        "columns": [("tenantId", "int"), ("ca_rankinglistid", "bigint"), ("ca_applicationid", "bigint"), ("newhireid", "bigint")],
+        "types": {"tenantId": IntegerType(), "ca_rankinglistid": LongType(), "ca_applicationid": LongType(), "newhireid": LongType()}
+    },
+    "certificateApplicationRequestIDs": {
+        "folder_name": "certificateApplicationRequestIDs",
+        "redshift_table": "certificateApplicationRequestID",
+        "columns": [("tenantId", "int"), ("ca_ranking_listid", "bigint"), ("ca_applicationid", "bigint"), ("requestid", "bigint")],
+        "types": {"tenantId": IntegerType(), "ca_ranking_listid": LongType(), "ca_applicationid": LongType(), "requestid": LongType()}
     }
 }
 
@@ -168,7 +180,7 @@ def process_dataset(folder_name, redshift_table, redshift_columns, redshift_type
         print(f"Error processing {folder_name}: {str(e)}")
         raise
 
-# Process both datasets
+# Process all datasets
 for dataset_name, config in datasets.items():
     process_dataset(
         folder_name=config["folder_name"],

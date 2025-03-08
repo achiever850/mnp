@@ -49,6 +49,48 @@ datasets = {
         "redshift_table": "certificateApplicationRequestID",
         "columns": [("tenantId", "int"), ("ca_ranking_listid", "bigint"), ("ca_applicationid", "bigint"), ("requestid", "bigint")],
         "types": {"tenantId": IntegerType(), "ca_ranking_listid": LongType(), "ca_applicationid": LongType(), "requestid": LongType()}
+    },
+    "timeToHireCustomerIDs": {
+        "folder_name": "timeToHireCustomerIDs",
+        "redshift_table": "timeToHireCustomerID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("customerid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "customerid": LongType()}
+    },
+    "timeToHireNewHireIDs": {
+        "folder_name": "timeToHireNewHireIDs",
+        "redshift_table": "timeToHireNewHireID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("newhireid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "newhireid": LongType()}
+    },
+    "timeToHireOfficeIDs": {
+        "folder_name": "timeToHireOfficeIDs",
+        "redshift_table": "timeToHireOfficeID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("officeid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "officeid": LongType()}
+    },
+    "timeToHireOrganizationIDs": {
+        "folder_name": "timeToHireOrganizationIDs",
+        "redshift_table": "timeToHireOrganizationID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("orgid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "orgid": LongType()}
+    },
+    "timeToHireRequestIDs": {
+        "folder_name": "timeToHireRequestIDs",
+        "redshift_table": "timeToHireRequestID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("requestid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "requestid": LongType()}
+    },
+    "timeToHireVacancyIDs": {
+        "folder_name": "timeToHireVacancyIDs",
+        "redshift_table": "timeToHireVacancyID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("vacancyid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "vacancyid": LongType()}
+    },
+    "timeToHireAnnouncementIDs": {
+        "folder_name": "timeToHireAnnouncementIDs",
+        "redshift_table": "timeToHireAnnouncementID",
+        "columns": [("tenantid", "int"), ("tthrequestid", "bigint"), ("announcementid", "bigint")],
+        "types": {"tenantid": IntegerType(), "tthrequestid": LongType(), "announcementid": LongType()}
     }
 }
 

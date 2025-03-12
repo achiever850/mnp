@@ -1,0 +1,258 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.types import IntegerType, LongType, StringType
+from pyspark.sql.functions import col, when
+import boto3
+
+# Initialize Glue context and job
+args = getResolvedOptions(sys.argv, ["JOB_NAME", "TABLE_NAME"])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+# Common configurations
+s3_base_path = "s3://hcd-ec2-windows-servers-file-transfer-bucket/usa_staffing_csv/external_id_csv/"
+redshift_connection = "hcd_dev_redshift_connection"
+redshift_temp_dir = "s3://aws-glue-assets-094737541415-us-gov-west-1/temporary/"
+redshift_database = "hcd-dev-db"
+redshift_schema = "usastaffing_staging"
+
+# Dataset configurations
+datasets = {
+    "certificateApplicationApplicationIDs": {
+        "folder_name": "certificateApplicationApplicationIDs",
+        "redshift_table": "certificateApplicationApplicationID",
+        "columns": [("tenantId", "int"), ("cA_RankingListId", "bigint"), ("cA_ApplicationId", "bigint"), ("applicationId", "bigint")],
+        "types": {"tenantId": IntegerType(), "cA_RankingListId": LongType(), "cA_ApplicationId": LongType(), "applicationId": LongType()}
+    },
+    "certificateApplicationRankingListIDs": {
+        "folder_name": "certificateApplicationRankingListIDs",
+        "redshift_table": "certificateApplicationRankingListID",
+        "columns": [("tenantId", "int"), ("cA_RankingListId", "bigint"), ("cA_ApplicationId", "bigint"), ("rankingListId", "bigint")],
+        "types": {"tenantId": IntegerType(), "cA_RankingListId": LongType(), "cA_ApplicationId": LongType(), "rankingListId": LongType()}
+    },
+    "certificateApplicationNewHireIDs": {
+        "folder_name": "certificateApplicationNewHireIDs",
+        "redshift_table": "certificateApplicationNewHireID",
+        "columns": [("tenantId", "int"), ("ca_rankinglistid", "bigint"), ("ca_applicationid", "bigint"), ("newhireid", "bigint")],
+        "types": {"tenantId": IntegerType(), "ca_rankinglistid": LongType(), "ca_applicationid": LongType(), "newhireid": LongType()}
+    },
+    "certificateApplicationRequestIDs": {
+        "folder_name": "certificateApplicationRequestIDs",
+        "redshift_table": "certificateApplicationRequestID",
+        "columns": [("tenantId", "int"), ("ca_rankinglistid", "bigint"), ("ca_applicationid", "bigint"), ("requestid", "bigint")],
+        "types": {"tenantId": IntegerType(), "ca_rankinglistid": LongType(), "ca_applicationid": LongType(), "requestid": LongType()}
+    },
+    "timeToHireCustomerIDs": {
+        "folder_name": "timeToHireCustomerIDs",
+        "redshift_table": "timeToHireCustomerID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("customerId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "customerId": LongType()}
+    },
+    "timeToHireNewHireIDs": {
+        "folder_name": "timeToHireNewHireIDs",
+        "redshift_table": "timeToHireNewHireID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("newhireId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "newhireId": LongType()}
+    },
+    "timeToHireOfficeIDs": {
+        "folder_name": "timeToHireOfficeIDs",
+        "redshift_table": "timeToHireOfficeID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("officeId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "officeId": LongType()}
+    },
+    "timeToHireOrganizationIDs": {
+        "folder_name": "timeToHireOrganizationIDs",
+        "redshift_table": "timeToHireOrganizationID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("orgId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "orgId": LongType()}
+    },
+    "timeToHireRequestIDs": {
+        "folder_name": "timeToHireRequestIDs",
+        "redshift_table": "timeToHireRequestID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("requestId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "requestId": LongType()}
+    },
+    "timeToHireVacancyIDs": {
+        "folder_name": "timeToHireVacancyIDs",
+        "redshift_table": "timeToHireVacancyID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("vacancyId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "vacancyId": LongType()}
+    },
+    "timeToHireAnnouncementIDs": {
+        "folder_name": "timeToHireAnnouncementIDs",
+        "redshift_table": "timeToHireAnnouncementID",
+        "columns": [("tenantId", "int"), ("tthRequestId", "bigint"), ("announcementId", "bigint")],
+        "types": {"tenantId": IntegerType(), "tthRequestId": LongType(), "announcementId": LongType()}
+    }
+}
+
+# Function to read raw CSV lines from S3
+def read_raw_csv_sample(folder_path, num_lines=5):
+    s3_client = boto3.client('s3')
+    bucket = "hcd-ec2-windows-servers-file-transfer-bucket"
+    prefix = folder_path.split('s3://')[1].split('/', 1)[1]
+    response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    if 'Contents' not in response:
+        return ["No files found in S3 path"]
+    key = response['Contents'][0]['Key']
+    obj = s3_client.get_object(Bucket=bucket, Key=key)
+    lines = obj['Body'].read().decode('utf-8').splitlines()[:num_lines]
+    return lines
+
+# Processing function
+def process_dataset(folder_name, redshift_table, redshift_columns, redshift_types):
+    full_table_name = f"{redshift_schema}.{redshift_table}"
+    folder_path = f"{s3_base_path}{folder_name}/"
+    redshift_col_names = [col[0] for col in redshift_columns]
+
+    try:
+        print(f"\nProcessing Folder: {folder_name} → Redshift Table: {full_table_name}")
+
+        # Log raw CSV sample
+        print(f"Raw CSV Sample (first 5 lines) for {folder_name}:")
+        raw_lines = read_raw_csv_sample(folder_path)
+        for i, line in enumerate(raw_lines):
+            print(f"Line {i+1}: {line}")
+
+        # Read CSV with header=False to inspect raw data
+        dynamic_frame = glueContext.create_dynamic_frame.from_options(
+            connection_type="s3",
+            connection_options={"paths": [folder_path], "recurse": True},
+            format="csv",
+            format_options={"header": False, "separator": ",", "quoteChar": "\"", "skipBlankLines": True}
+        )
+        row_count = dynamic_frame.count()
+        print(f"Row count for {folder_name}: {row_count}")
+        if row_count == 0:
+            raise Exception("No data to process")
+
+        # Log raw data
+        print(f"Raw DynamicFrame Schema for {folder_name}:")
+        dynamic_frame.printSchema()
+        print(f"Raw DynamicFrame Sample (first 5 rows):")
+        dynamic_frame.show(5)
+
+        # Convert to DataFrame safely
+        df = spark.createDataFrame(dynamic_frame.toDF().rdd, dynamic_frame.toDF().schema)
+        print(f"CSV Column names for {folder_name}: {df.columns}")
+
+        # Map headers assuming first row was headers
+        csv_columns = [col for col in df.columns]
+        if all(col.startswith('col') for col in csv_columns):
+            print(f"WARNING: Headers not detected - assuming first row is data, mapping to {redshift_col_names}")
+            if len(csv_columns) != len(redshift_col_names):
+                raise Exception(f"Column count mismatch - CSV has {len(csv_columns)}, expected {len(redshift_col_names)}")
+            # Filter out header row using the first expected header value
+            header_row = [f"{col[0]}" for col in redshift_columns]
+            df = df.filter(~col(csv_columns[0]).isin(header_row[0]))
+            df = df.toDF(*redshift_col_names)
+        else:
+            print(f"Headers detected: {csv_columns}")
+            if set(csv_columns) != set(redshift_col_names):
+                print(f"WARNING: CSV headers {csv_columns} do not match expected {redshift_col_names}")
+                df = df.toDF(*redshift_col_names)
+
+        print(f"Mapped Column names for {folder_name}: {df.columns}")
+
+        # Preserve original string values
+        for col_name in redshift_types.keys():
+            df = df.withColumn(f"{col_name}_original", col(col_name).cast(StringType()))
+
+        print(f"Before casting - Sample Data with Original Values:")
+        df.show(5)
+
+        # Count pre-cast nulls
+        for col_name in redshift_types.keys():
+            pre_null_count = df.filter(col(col_name).isNull()).count()
+            print(f"Pre-cast nulls in {col_name}: {pre_null_count}")
+
+        # Replace empty strings with "0" before casting
+        for col_name in redshift_types.keys():
+            df = df.withColumn(col_name, when(col(col_name) == "", "0").otherwise(col(col_name)))
+            df = df.withColumn(col_name, col(col_name).cast(redshift_types[col_name]))
+
+        print(f"After casting - Sample Data with Original Values:")
+        df.show(5)
+
+        # Count post-cast nulls
+        for col_name in redshift_types.keys():
+            post_null_count = df.filter(col(col_name).isNull()).count()
+            print(f"Post-cast nulls in {col_name}: {post_null_count}")
+
+        # Identify rows where casting still results in NULLs
+        null_condition = " or ".join([f"{col_name} IS NULL" for col_name in redshift_types.keys()])
+        problematic_rows = df.filter(null_condition).select(
+            *[f"{col_name}_original" for col_name in redshift_types.keys()]
+        )
+        print(f"Original values of rows with NULLs after casting (up to 5):")
+        problematic_rows.show(5, truncate=False)
+        print(f"Total rows with NULLs after casting: {problematic_rows.count()}")
+
+        # Drop temporary columns
+        df = df.drop(*[f"{col_name}_original" for col_name in redshift_types.keys()])
+
+        # Convert back to DynamicFrame
+        filtered_dynamic_frame = DynamicFrame.fromDF(df, glueContext, f"{folder_name}_filtered")
+
+        # Write to Redshift
+        truncate_query = f"TRUNCATE TABLE {full_table_name};"
+        print(f"Executing: {truncate_query}")
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=filtered_dynamic_frame,
+            catalog_connection=redshift_connection,
+            connection_options={
+                "dbtable": full_table_name,
+                "database": redshift_database,
+                "preactions": truncate_query,
+                "createTableIfNotExists": "false",
+                "redshiftTmpDir": redshift_temp_dir
+            },
+            redshift_tmp_dir=redshift_temp_dir
+        )
+        print(f"Write completed for {full_table_name}")
+
+    except Exception as e:
+        print(f"Error processing {folder_name}: {str(e)}")
+        raise
+
+# Get the selection from job parameters
+selection = args.get("TABLE_NAME", "all").strip()  # Default to "all" if not provided
+
+# Map selection to folder prefixes
+folder_map = {
+    "1": "certificateApplication",
+    "2": "timeToHire"
+}
+
+# Determine tables to process based on selection
+if selection == "all":
+    tables_to_process = datasets.keys()
+else:
+    folder_prefix = folder_map.get(selection)
+    if not folder_prefix:
+        raise ValueError(f"Invalid selection '{selection}'. Use '1' for certificateApplication, '2' for timeToHire, or 'all' for all tables")
+    tables_to_process = [key for key in datasets.keys() if datasets[key]["folder_name"].startswith(folder_prefix)]
+
+# Process specified datasets
+print(f"Selection: {selection}")
+print(f"Tables to process: {tables_to_process}")
+for dataset_name in tables_to_process:
+    config = datasets[dataset_name]
+    process_dataset(
+        folder_name=config["folder_name"],
+        redshift_table=config["redshift_table"],
+        redshift_columns=config["columns"],
+        redshift_types=config["types"]
+    )
+
+# Commit Job
+print("\nJob execution completed - committing job")
+job.commit()
